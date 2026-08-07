@@ -15,12 +15,17 @@ def decode_predictions(raw_output: torch.Tensor, conf_thres: float = 0.25, iou_t
 
 import torch.nn.functional as F
 
-def letterbox(image_CHW: torch.Tensor, size: int = 640) -> torch.Tensor:
-    """Resize+pad a CHW image to a size x size square, preserving aspect ratio."""
+def letterbox(image_CHW: torch.Tensor, size: int = 640) -> tuple[torch.Tensor, float, float, float]:
+    """Resize+pad a CHW image to a size x size square, preserving aspect ratio.
+
+    Returns the padded image along with the scale factor and the (left, top) pad
+    offsets applied, so callers can remap boxes into or out of letterboxed space.
+    """
     _, h, w = image_CHW.shape
     scale = size / max(h, w)
     new_h, new_w = int(round(h * scale)), int(round(w * scale))
     resized = F.interpolate(image_CHW.unsqueeze(0), size=(new_h, new_w), mode="bilinear", align_corners=False)[0]
     pad_h, pad_w = size - new_h, size - new_w
-    padded = F.pad(resized, (0, pad_w, 0, pad_h), value=0.447)  # YOLO's grey pad value
-    return padded
+    top, left = pad_h // 2, pad_w // 2
+    padded = F.pad(resized, (left, pad_w - left, top, pad_h - top), value=0.447)  # YOLO's grey pad value
+    return padded, scale, left, top
