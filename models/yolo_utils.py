@@ -29,3 +29,24 @@ def letterbox(image_CHW: torch.Tensor, size: int = 640) -> tuple[torch.Tensor, f
     top, left = pad_h // 2, pad_w // 2
     padded = F.pad(resized, (left, pad_w - left, top, pad_h - top), value=0.447)  # YOLO's grey pad value
     return padded, scale, left, top
+
+def decode_predictions(
+    raw_output: torch.Tensor,
+    transforms: list[tuple[float, float, float]],
+    conf_thres: float = 0.25,
+    iou_thres: float = 0.45,
+    ) -> list[dict]:
+    """Convert raw YOLO head output into Torchvision-style detection dicts,
+    with boxes remapped from letterboxed space back to original image space."""
+    results = ops.non_max_suppression(raw_output, conf_thres=conf_thres, iou_thres=iou_thres)
+    predictions = []
+    for detections, (scale, left, top) in zip(results, transforms, strict=True):
+        boxes = detections[:, :4].clone()
+        boxes[:, [0, 2]] = (boxes[:, [0, 2]] - left) / scale
+        boxes[:, [1, 3]] = (boxes[:, [1, 3]] - top) / scale
+        predictions.append({
+            "boxes": boxes,
+            "scores": detections[:, 4],
+            "labels": detections[:, 5].to(torch.int64),
+        })
+    return predictions
