@@ -15,7 +15,7 @@ from wandb.sdk.wandb_run import Run
 
 from dataset import LocoDataset, collate_fn
 from metrics.accuracy import compute_map50
-from models.baseline import create_model
+from models.yolo_wrapper import create_yolo_model
 from utils.config import load_config
 
 
@@ -49,7 +49,7 @@ def train(config: dict[str, Any], run: Run | None) -> None:
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_model(train_dataset.num_classes).to(device)
+    model = create_yolo_model(train_dataset.num_classes).to(device)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
         params,

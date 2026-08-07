@@ -60,6 +60,7 @@ class YoloWrapper(nn.Module):
         _, loss_items = self.model.loss(yolo_batch)
         return {"box_loss": loss_items[0], "cls_loss": loss_items[1], "dfl_loss": loss_items[2]}
 
-def create_yolo_model(num_classes: int, checkpoint: str = "yolo26n.pt") -> nn.Module:
+def create_yolo_model(num_classes: int, checkpoint: str = "yolo26s.pt") -> nn.Module:
     """Create a YOLO model wrapper; ``num_classes`` includes background, YOLO has none."""
     return YoloWrapper(checkpoint, num_classes - 1)
+

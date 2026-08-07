@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from dataset import LocoDataset, collate_fn
 from metrics.accuracy import compute_map50
 from metrics.efficiency import count_parameters, measure_gflops
-from models.baseline import create_model
+from models.yolo_wrapper import create_yolo_model
 from utils.config import load_config
 
 
@@ -59,7 +59,7 @@ def main() -> None:
         collate_fn=collate_fn,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_model(dataset.num_classes)
+    model = create_yolo_model(dataset.num_classes)
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
     model.to(device)
 
