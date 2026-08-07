@@ -19,14 +19,14 @@ class YoloWrapper(nn.Module):
     def forward(self, images_L: list, targets_L: list[dict] | None = None):
         letterboxed = [letterbox(image_CHW) for image_CHW in images_L]
         batch = torch.stack([image for image, _, _, _ in letterboxed])
+        transforms = [(scale, left, top) for _, scale, left, top in letterboxed]
 
         if self.training and targets_L is not None:
-            transforms = [(scale, left, top) for _, scale, left, top in letterboxed]
             return self._compute_loss(batch, targets_L, transforms)
 
         output = self.model(batch)
         raw_output = output[0] if isinstance(output, tuple) else output
-        return decode_predictions(raw_output)
+        return decode_predictions(raw_output, transforms)
 
     def _compute_loss(
         self, batch: torch.Tensor, targets_L: list[dict], transforms: list[tuple[float, float, float]]
