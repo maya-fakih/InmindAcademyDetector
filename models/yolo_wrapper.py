@@ -15,7 +15,7 @@ class YoloWrapper(nn.Module):
         self.model = DetectionModel(cfg=pretrained.yaml, nc=num_classes)
         self.model.load(pretrained)
         self.num_classes = num_classes
-        
+
     def forward(self, images_L: list, targets_L: list[dict] | None = None):
         batch = torch.stack([letterbox(image_CHW) for image_CHW in images_L])
 
@@ -52,4 +52,5 @@ class YoloWrapper(nn.Module):
         return {"box_loss": loss_items[0], "cls_loss": loss_items[1], "dfl_loss": loss_items[2]}
 
 def create_yolo_model(num_classes: int, checkpoint: str = "yolo26n.pt") -> nn.Module:
-    return YoloWrapper(checkpoint, num_classes - 1)  # dataset.num_classes includes background; YOLO has nonedef create_yolo_model(num_classes: int, checkpoint: str = "yolo26n.pt") -> nn.Module:
+    """Create a YOLO model wrapper; ``num_classes`` includes background, YOLO has none."""
+    return YoloWrapper(checkpoint, num_classes - 1)
