@@ -4,6 +4,7 @@ from ultralytics import YOLO
 
 from models.yolo_utils import decode_predictions, letterbox
 from ultralytics.nn.tasks import DetectionModel
+from ultralytics.utils import DEFAULT_CFG
 
 
 class YoloWrapper(nn.Module):
@@ -14,6 +15,12 @@ class YoloWrapper(nn.Module):
         pretrained = YOLO(checkpoint).model
         self.model = DetectionModel(cfg=pretrained.yaml, nc=num_classes)
         self.model.load(pretrained)
+        # DetectionModel.load() only copies the state_dict, not `.args`. Normally
+        # Ultralytics' own Trainer sets model.args to a hyperparameter namespace
+        # before training; since we drive training ourselves, v8DetectionLoss's
+        # first call (self.hyp.box / .cls / .dfl gains) would otherwise raise
+        # AttributeError: 'DetectionModel' object has no attribute 'args'.
+        self.model.args = DEFAULT_CFG
         self.num_classes = num_classes
 
     def forward(self, images_L: list, targets_L: list[dict] | None = None):
@@ -63,4 +70,3 @@ class YoloWrapper(nn.Module):
 def create_yolo_model(num_classes: int, checkpoint: str = "yolo26s.pt") -> nn.Module:
     """Create a YOLO model wrapper; ``num_classes`` includes background, YOLO has none."""
     return YoloWrapper(checkpoint, num_classes - 1)
-
