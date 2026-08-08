@@ -19,7 +19,7 @@ from models.yolo_wrapper import create_yolo_model
 from utils.config import load_config
 
 
-def train(config: dict[str, Any], run: Run | None) -> None:
+def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
     """Train the detector and save the best weights."""
     settings = config["train"]
     torch.manual_seed(settings["seed"])
@@ -59,9 +59,24 @@ def train(config: dict[str, Any], run: Run | None) -> None:
     )
     weights_dir = Path(config["output_dir"]) / "weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
+    last_checkpoint_path = weights_dir / "last.ckpt"
+    best_checkpoint_path = weights_dir / "best.ckpt"
     best_map = -1.0
+    start_epoch = 0
 
-    for epoch in range(settings["epochs"]):
+    resume_path = {"last": last_checkpoint_path, "best": best_checkpoint_path}.get(resume_from)
+    if resume_path is not None and resume_path.is_file():
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+        model.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        start_epoch = checkpoint["epoch"] + 1
+        best_map = checkpoint["best_map"]
+        print(
+            f"[resume] continuing from {resume_from}.ckpt, epoch {start_epoch + 1}, "
+            f"best_map so far {best_map:.4f}"
+        )
+
+    for epoch in range(start_epoch, settings["epochs"]):
         epoch_start = time.perf_counter()
         model.train()
         epoch_loss = 0.0
@@ -99,7 +114,26 @@ def train(config: dict[str, Any], run: Run | None) -> None:
         if map50 > best_map:
             best_map = map50
             torch.save(model.state_dict(), weights_dir / "best.pt")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "best_map": best_map,
+                },
+                best_checkpoint_path,
+            )
             print(f"  saved new best: {best_map:.4f}")
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "best_map": best_map,
+            },
+            last_checkpoint_path,
+        )
 
     print(f"[done] best weights: {weights_dir / 'best.pt'}")
 
@@ -107,12 +141,18 @@ def train(config: dict[str, Any], run: Run | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument(
+        "--resume",
+        choices=["last", "best"],
+        default=None,
+        help="continue from weights/last.ckpt or weights/best.ckpt if present",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
     wandb_config = config["wandb"]
 
     if not wandb_config["enabled"]:
-        train(config, run=None)
+        train(config, run=None, resume_from=args.resume)
         return
 
     with wandb.init(
@@ -120,7 +160,7 @@ def main() -> None:
         entity=wandb_config["entity"],
         config=config,
     ) as run:
-        train(config, run)
+        train(config, run, resume_from=args.resume)
 
 
 if __name__ == "__main__":
