@@ -1,18 +1,5 @@
 from ultralytics.utils import ops
 import torch
-
-def decode_predictions(raw_output: torch.Tensor, conf_thres: float = 0.25, iou_thres: float = 0.45) -> list[dict]:
-    """Convert raw YOLO head output into Torchvision-style detection dicts."""
-    results = ops.non_max_suppression(raw_output, conf_thres=conf_thres, iou_thres=iou_thres)
-    predictions = []
-    for detections in results:  # one tensor per image, columns: x1,y1,x2,y2,conf,cls
-        predictions.append({
-            "boxes": detections[:, :4],
-            "scores": detections[:, 4],
-            "labels": detections[:, 5].to(torch.int64),
-        })
-    return predictions
-
 import torch.nn.functional as F
 
 def letterbox(image_CHW: torch.Tensor, size: int = 640) -> tuple[torch.Tensor, float, float, float]:
@@ -47,6 +34,11 @@ def decode_predictions(
         predictions.append({
             "boxes": boxes,
             "scores": detections[:, 4],
-            "labels": detections[:, 5].to(torch.int64),
+            # YOLO's cls ids are 0-indexed (no background class); the dataset's
+            # labels are 1-indexed with 0 reserved for background (see
+            # LocoDataset.category_labels / _compute_loss's `labels - 1`).
+            # Map back so predicted and ground-truth label ids line up in
+            # compute_map50 / MeanAveragePrecision.
+            "labels": detections[:, 5].to(torch.int64) + 1,
         })
     return predictions
