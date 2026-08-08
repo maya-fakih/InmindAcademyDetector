@@ -100,8 +100,9 @@ def compute_balanced_split(
 
         best_bucket = min(
             candidates,
-            key=lambda bucket: _density_mse(
-                bucket_counts[bucket], image_classes, target_density, class_ids
+            key=lambda bucket: (
+                _density_mse(bucket_counts[bucket], image_classes, target_density, class_ids),
+                -_remaining_capacity_ratio(bucket, bucket_sizes, max_train, max_validation),
             ),
         )
         assignment[image_id] = best_bucket
@@ -109,6 +110,22 @@ def compute_balanced_split(
         bucket_sizes[best_bucket] += 1
 
     return assignment
+
+
+def _remaining_capacity_ratio(
+    bucket: str, bucket_sizes: dict[str, int], max_train: int, max_validation: int
+) -> float:
+    """Fraction of ``bucket``'s target size still unfilled; used to break exact MSE ties.
+
+    Without this, ``min()`` always favors whichever bucket is listed first among
+    the tied candidates (``"train"``), which can starve validation on ties even
+    when it has plenty of room left. Breaking ties toward the bucket furthest
+    behind its own target keeps both buckets filling at a similar pace.
+    """
+    max_size = max_train if bucket == "train" else max_validation
+    if max_size == 0:
+        return 0.0
+    return (max_size - bucket_sizes[bucket]) / max_size
 
 
 def _density_mse(
