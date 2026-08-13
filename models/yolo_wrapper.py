@@ -1,10 +1,10 @@
 import torch
 from torch import nn
 from ultralytics import YOLO
-
-from models.yolo_utils import decode_predictions, letterbox
 from ultralytics.nn.tasks import DetectionModel
 from ultralytics.utils import DEFAULT_CFG
+
+from models.yolo_utils import decode_predictions, letterbox
 
 
 class YoloWrapper(nn.Module):

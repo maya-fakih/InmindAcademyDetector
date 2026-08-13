@@ -1,6 +1,6 @@
-from ultralytics.utils import ops
 import torch
 import torch.nn.functional as F
+from ultralytics.utils import ops
 
 
 def letterbox(image_CHW: torch.Tensor, size: int = 640) -> tuple[torch.Tensor, float, float, float]:
