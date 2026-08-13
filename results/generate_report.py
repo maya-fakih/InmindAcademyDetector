@@ -9,8 +9,11 @@ them into results/<run-name>/report.md.
 
 import argparse
 import re
+import subprocess
+import sys
 from pathlib import Path
 
+METRIC_LINE = re.compile(r"^([\w /@.-]+?):\s+(.+)$")
 EPOCH_LINE = re.compile(r"epoch (\d+)/(\d+)\s+loss ([\d.]+)\s+val_mAP50 ([\d.]+)\s+(\d+)s")
 
 
@@ -32,6 +35,26 @@ def parse_train_log(log_path: Path) -> list[dict]:
                 }
             )
     return rows
+
+
+def run_eval(weights: Path, config: Path) -> dict[str, str]:
+    """Run the repo's own eval.py unchanged and parse its printed metric lines.
+
+    Reuses eval.py directly (subprocess) so the numbers in the report are
+    exactly what eval.py itself reports -- nothing is recomputed here.
+    """
+    result = subprocess.run(
+        [sys.executable, "eval.py", "--weights", str(weights), "--config", str(config)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    metrics = {}
+    for line in result.stdout.splitlines():
+        match = METRIC_LINE.match(line.strip())
+        if match:
+            metrics[match.group(1).strip()] = match.group(2).strip()
+    return metrics
 
 
 def plot_curves(rows: list[dict], output_path: Path) -> None:
