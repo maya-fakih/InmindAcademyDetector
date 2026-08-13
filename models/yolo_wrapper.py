@@ -36,11 +36,16 @@ class YoloWrapper(nn.Module):
         return decode_predictions(raw_output, transforms)
 
     def _compute_loss(
-        self, batch: torch.Tensor, targets_L: list[dict], transforms: list[tuple[float, float, float]]
+        self,
+        batch: torch.Tensor,
+        targets_L: list[dict],
+        transforms: list[tuple[float, float, float]],
     ) -> dict:
         _, _, h, w = batch.shape
         batch_idx, cls, bboxes = [], [], []
-        for image_index, (target, (scale, left, top)) in enumerate(zip(targets_L, transforms, strict=True)):
+        for image_index, (target, (scale, left, top)) in enumerate(
+            zip(targets_L, transforms, strict=True)
+        ):
             boxes_xyxy = target["boxes"]
             n = boxes_xyxy.shape[0]
             if n == 0:
@@ -66,6 +71,7 @@ class YoloWrapper(nn.Module):
         }
         _, loss_items = self.model.loss(yolo_batch)
         return {"box_loss": loss_items[0], "cls_loss": loss_items[1], "dfl_loss": loss_items[2]}
+
 
 def create_yolo_model(num_classes: int, checkpoint: str = "yolo26s.pt") -> nn.Module:
     """Create a YOLO model wrapper; ``num_classes`` includes background, YOLO has none."""
