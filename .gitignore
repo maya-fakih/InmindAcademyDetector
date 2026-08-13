@@ -4,6 +4,9 @@ runs/
 wandb/
 
 *.pt
+*.ckpt
+train.log
+eval.log
 
 .ruff_cache/
 .pytest_cache/
