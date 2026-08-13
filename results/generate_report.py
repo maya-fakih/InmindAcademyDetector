@@ -57,6 +57,26 @@ def run_eval(weights: Path, config: Path) -> dict[str, str]:
     return metrics
 
 
+def run_predict(weights: Path, config: Path, output_dir: Path, num_images: int) -> list[Path]:
+    """Run the repo's own predict.py unchanged and return the PNGs it wrote."""
+    subprocess.run(
+        [
+            sys.executable,
+            "predict.py",
+            "--weights",
+            str(weights),
+            "--config",
+            str(config),
+            "--num-images",
+            str(num_images),
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+    )
+    return sorted(output_dir.glob("prediction_*.png"))
+
+
 def plot_curves(rows: list[dict], output_path: Path) -> None:
     """Save a two-panel loss/mAP-vs-epoch figure. No-op if there's no history."""
     if not rows:
