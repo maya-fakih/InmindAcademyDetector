@@ -1,5 +1,87 @@
 # Handoff (yolo26s-coco branch)
 
+## Latest: background-swap augmentation + 100-epoch convergence run
+
+### Why
+The freeze/warmup 50-epoch run (see below) hit val_mAP50 = 0.3048 but only
+0.1120 on the real test subsets (1/4) -- a bad val/test gap. The LOCO
+dataset's own paper explains the likely mechanism directly: train (subsets
+2/3/5) and test (subsets 1/4) are **different physical warehouses** by
+design --
+
+> "we use subsets to perform the training and evaluation split, since each
+> of them corresponds to one particular logistics environment. This
+> guarantees that the training and evaluation sets are disjoint from each
+> other, which implicitly shifts the focus in machine-learning applications
+> towards generalizable models, since certain conditions (i.e. scene,
+> lighting, color) may have not been encountered in the training set."
+> -- Mayershofer, C., Holm, D.-M., Molter, B., Fottner, J. "LOCO: Logistics
+> Objects in Context." IEEE ICMLA 2020.
+> https://mediatum.ub.tum.de/doc/1578845/ndh526owvo3yhfqcaw2qypl5g.201007-loco-ieee-compressed.pdf
+
+That's the dataset's own stated design goal, not a separate paper's
+critique -- if the model is keying off background/scene context (warehouse
+lighting, floor color, rack layout) rather than the objects themselves,
+performance should drop exactly this way when the test warehouses are ones
+it's never seen. I did not find a paper making this exact background-bias
+claim about LOCO specifically beyond the original paper's own framing above;
+said so rather than inventing a stronger citation.
+
+### What changed
+- `augmentation.py` (new) -- `random_horizontal_flip` and
+  `random_background_swap`. The latter keeps an image's labeled objects
+  (exact pixels, so boxes stay valid) but replaces everything outside those
+  boxes with a different training image's background, directly attacking
+  the background-context shortcut. Verified with synthetic array tests:
+  box-remap math for hflip, and that the object region survives a swap
+  pixel-for-pixel while the rest becomes the donor's content.
+  **Known limitation, stated not hidden**: the donor's own labeled objects
+  aren't masked out of the donor background, so a donor object can bleed
+  into the composited image. Worth revisiting if this augmentation helps
+  overall but seems to add label noise.
+- `dataset.py` -- `LocoDataset` takes `background_swap_prob`/`hflip_prob`,
+  applied in `__getitem__` before tensor conversion. **Validation and test
+  splits force these to 0 regardless of what's passed in** (checked in
+  `__init__`) -- `best.pt` selection must stay on clean, real val images,
+  not augmented ones, or "best" stops meaning what it should.
+- `train.py` -- reads `augment.enabled`/`background_swap_prob`/`hflip_prob`
+  from config, passed only to the train split.
+- `config.yaml` -- `augment.enabled: true`, both probs 0.5; `epochs: 100`
+  (up from 50) to see whether mAP keeps climbing or plateaus/overfits by
+  epoch 100 -- the freeze/warmup run was still rising at epoch 50, hadn't
+  converged.
+
+### Verification performed here (no live Colab/GPU in this sandbox)
+- `random_horizontal_flip`/`random_background_swap` unit-tested on
+  synthetic numpy arrays (box remap correctness, object-region pixel
+  preservation under swap).
+- `LocoDataset` end-to-end tested against a synthetic mini COCO-format
+  dataset: augmented `__getitem__` returns correct shapes, and validation
+  split's aug probs are confirmed forced to 0 even when 1.0 is passed in.
+- `ruff format --check .` and `ruff check .` both pass.
+- **Not verified here**: an actual multi-epoch training run with
+  augmentation on, since that needs the real LOCO images + a GPU. First
+  real signal is whatever epoch 1 looks like on Colab -- if loss/mAP
+  behave wildly differently from the un-augmented runs, stop and diagnose
+  before trusting a full 100-epoch run to it.
+
+### Left to do
+- Run this on Colab: `bash scripts/colab_runner.sh` (fresh run, no
+  `resume` arg -- old checkpoints were trained without augmentation).
+- Watch val_mAP50 through ~epoch 50 vs the un-augmented run's 0.3048 at the
+  same point -- if augmentation is actively hurting (worse, not better),
+  turn off `augment.enabled` rather than pushing through 100 epochs on a
+  regression.
+- At 100 epochs: check whether mAP plateaus (real convergence signal) vs.
+  still climbing (would suggest even more epochs might help) vs. dropping
+  late (overfitting despite augmentation).
+- If the val/test gap doesn't close, background bias may not be the whole
+  story -- also worth checking image resolution/scale mismatch between
+  subsets, and whether class distribution genuinely differs across
+  warehouses beyond what `compute_balanced_split` already corrects for
+  (that function only balances within 2/3/5, not against 1/4's actual
+  distribution, which it can't see by design).
+
 ## Status
 Not yet run under the new regime — a GPU-hour cap hit mid-transition,
 resuming on a fresh Colab account with the same repo/branches (nothing
