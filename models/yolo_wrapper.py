@@ -69,8 +69,13 @@ class YoloWrapper(nn.Module):
             "cls": (torch.cat(cls) if cls else torch.zeros(0)).to(batch.device),
             "bboxes": (torch.cat(bboxes) if bboxes else torch.zeros(0, 4)).to(batch.device),
         }
-        _, loss_items = self.model.loss(yolo_batch)
-        return {"box_loss": loss_items[0], "cls_loss": loss_items[1], "dfl_loss": loss_items[2]}
+        # model.loss() returns (grad-enabled per-component loss tensor, a
+        # DETACHED dict of the same values meant only for logging). The
+        # detached dict can't be backpropagated -- must build the returned
+        # dict from the grad-enabled tensor instead.
+        total_loss, _ = self.model.loss(yolo_batch)
+        loss_names = self.model.criterion.one2many.loss_names
+        return dict(zip(loss_names, total_loss, strict=True))
 
 
 def create_yolo_model(num_classes: int, checkpoint: str = "yolo26s.pt") -> nn.Module:
