@@ -80,6 +80,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         epoch_start = time.perf_counter()
         model.train()
         epoch_loss = 0.0
+        component_totals: dict[str, float] = {}
         progress = tqdm(train_loader, desc=f"epoch {epoch + 1}/{settings['epochs']}", leave=False)
         for step, (images_L, targets_L) in enumerate(progress):
             images_L = [image_CHW.to(device) for image_CHW in images_L]
@@ -93,15 +94,22 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
+            for name, value in losses.items():
+                component_totals[name] = component_totals.get(name, 0.0) + value.item()
             progress.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
 
         epoch_loss /= len(train_loader)
+        component_avgs = {
+            name: total / len(train_loader) for name, total in component_totals.items()
+        }
         map50 = compute_map50(model, val_loader, device)
         epoch_seconds = time.perf_counter() - epoch_start
+        breakdown = "  ".join(f"{name} {value:.4f}" for name, value in component_avgs.items())
         print(
             f"epoch {epoch + 1}/{settings['epochs']}  loss {epoch_loss:.4f}  "
             f"val_mAP50 {map50:.4f}  {epoch_seconds:.0f}s"
         )
+        print(f"  loss breakdown: {breakdown}")
         if run is not None:
             run.log(
                 {
