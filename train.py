@@ -1,6 +1,7 @@
 """Train the LOCO Faster R-CNN baseline."""
 
 import argparse
+import math
 import random
 import time
 from pathlib import Path
@@ -17,6 +18,31 @@ from dataset import LocoDataset, collate_fn
 from metrics.accuracy import compute_map50
 from models.yolo_wrapper import create_yolo_model
 from utils.config import load_config
+
+
+def compute_lr(
+    epoch: int, base_lr: float, warmup_epochs: int, total_epochs: int, final_fraction: float
+) -> float:
+    """Linear warmup for `warmup_epochs`, then cosine decay to `final_fraction` of base_lr."""
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return base_lr * (epoch + 1) / warmup_epochs
+    span = max(1, total_epochs - warmup_epochs)
+    progress = min((epoch - warmup_epochs) / span, 1.0)
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))
+    return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
+
+
+def set_backbone_frozen(model: torch.nn.Module, num_layers: int, frozen: bool) -> None:
+    """Freeze or unfreeze the first `num_layers` layers of the underlying YOLO backbone.
+
+    Layer indices match the printed model summary (Conv/C3k2/.../C2PSA at index 10
+    is the last backbone block; freeze_backbone_layers=11 covers layers 0-10).
+    """
+    for index, layer in enumerate(model.model.model):
+        if index >= num_layers:
+            break
+        for parameter in layer.parameters():
+            parameter.requires_grad = not frozen
 
 
 def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
@@ -49,8 +75,32 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    checkpoint = config.get("model", {}).get("checkpoint", "yolo26s.pt")
-    model = create_yolo_model(train_dataset.num_classes, checkpoint=checkpoint).to(device)
+    weights_dir = Path(config["output_dir"]) / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_checkpoint_path = weights_dir / "last.ckpt"
+    best_checkpoint_path = weights_dir / "best.ckpt"
+
+    # Peek the checkpoint's epoch (if resuming) before deciding whether to freeze the
+    # backbone -- freezing only makes sense for the initial epochs of a fresh run.
+    resume_path = {"last": last_checkpoint_path, "best": best_checkpoint_path}.get(resume_from)
+    resume_checkpoint = None
+    start_epoch = 0
+    if resume_path is not None and resume_path.is_file():
+        resume_checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+        start_epoch = resume_checkpoint["epoch"] + 1
+
+    pretrained_checkpoint = config.get("model", {}).get("checkpoint", "yolo26s.pt")
+    model = create_yolo_model(train_dataset.num_classes, checkpoint=pretrained_checkpoint).to(
+        device
+    )
+
+    freeze_epochs = settings.get("freeze_backbone_epochs", 0)
+    freeze_layers = settings.get("freeze_backbone_layers", 0)
+    backbone_frozen = freeze_epochs > 0 and start_epoch < freeze_epochs
+    if freeze_layers > 0:
+        set_backbone_frozen(model, freeze_layers, frozen=backbone_frozen)
+
+
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
         params,
@@ -58,26 +108,45 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         momentum=settings["momentum"],
         weight_decay=settings["weight_decay"],
     )
-    weights_dir = Path(config["output_dir"]) / "weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
-    last_checkpoint_path = weights_dir / "last.ckpt"
-    best_checkpoint_path = weights_dir / "best.ckpt"
     best_map = -1.0
-    start_epoch = 0
 
-    resume_path = {"last": last_checkpoint_path, "best": best_checkpoint_path}.get(resume_from)
-    if resume_path is not None and resume_path.is_file():
-        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
-        model.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        start_epoch = checkpoint["epoch"] + 1
-        best_map = checkpoint["best_map"]
+    if resume_checkpoint is not None:
+        model.load_state_dict(resume_checkpoint["model_state"])
+        try:
+            optimizer.load_state_dict(resume_checkpoint["optimizer_state"])
+        except (ValueError, RuntimeError) as error:
+            print(
+                f"[resume] optimizer state didn't match new param groups, "
+                f"starting fresh momentum: {error}"
+            )
+        best_map = resume_checkpoint["best_map"]
         print(
             f"[resume] continuing from {resume_from}.ckpt, epoch {start_epoch + 1}, "
             f"best_map so far {best_map:.4f}"
         )
 
     for epoch in range(start_epoch, settings["epochs"]):
+        if freeze_layers > 0 and backbone_frozen and epoch >= freeze_epochs:
+            print(f"  [freeze] unfreezing backbone at epoch {epoch + 1}")
+            set_backbone_frozen(model, freeze_layers, frozen=False)
+            backbone_frozen = False
+            optimizer = SGD(
+                [parameter for parameter in model.parameters() if parameter.requires_grad],
+                lr=settings["learning_rate"],
+                momentum=settings["momentum"],
+                weight_decay=settings["weight_decay"],
+            )
+
+        current_lr = compute_lr(
+            epoch,
+            settings["learning_rate"],
+            settings.get("warmup_epochs", 0),
+            settings["epochs"],
+            settings.get("lr_final_fraction", 1.0),
+        )
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
+
         epoch_start = time.perf_counter()
         model.train()
         epoch_loss = 0.0
@@ -108,7 +177,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         breakdown = "  ".join(f"{name} {value:.4f}" for name, value in component_avgs.items())
         print(
             f"epoch {epoch + 1}/{settings['epochs']}  loss {epoch_loss:.4f}  "
-            f"val_mAP50 {map50:.4f}  {epoch_seconds:.0f}s"
+            f"val_mAP50 {map50:.4f}  lr {current_lr:.6f}  {epoch_seconds:.0f}s"
         )
         print(f"  loss breakdown: {breakdown}")
         if run is not None:
