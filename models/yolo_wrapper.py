@@ -65,9 +65,9 @@ class YoloWrapper(nn.Module):
 
         yolo_batch = {
             "img": batch,
-            "batch_idx": torch.cat(batch_idx) if batch_idx else torch.zeros(0),
-            "cls": torch.cat(cls) if cls else torch.zeros(0),
-            "bboxes": torch.cat(bboxes) if bboxes else torch.zeros(0, 4),
+            "batch_idx": (torch.cat(batch_idx) if batch_idx else torch.zeros(0)).to(batch.device),
+            "cls": (torch.cat(cls) if cls else torch.zeros(0)).to(batch.device),
+            "bboxes": (torch.cat(bboxes) if bboxes else torch.zeros(0, 4)).to(batch.device),
         }
         _, loss_items = self.model.loss(yolo_batch)
         return {"box_loss": loss_items[0], "cls_loss": loss_items[1], "dfl_loss": loss_items[2]}
