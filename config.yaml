@@ -2,7 +2,7 @@ data:
   raw_dir: dataset
 
 train:
-  epochs: 20
+  epochs: 50
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01
