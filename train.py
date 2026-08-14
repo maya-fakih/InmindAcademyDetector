@@ -52,7 +52,19 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     random.seed(settings["seed"])
 
     data = config["data"]
-    train_dataset = LocoDataset(Path(data["raw_dir"]), split="train")
+    augment = config.get("augment", {})
+    if augment.get("enabled", False):
+        train_dataset = LocoDataset(
+            Path(data["raw_dir"]),
+            split="train",
+            background_swap_prob=augment.get("background_swap_prob", 0.0),
+            hflip_prob=augment.get("hflip_prob", 0.0),
+        )
+    else:
+        train_dataset = LocoDataset(Path(data["raw_dir"]), split="train")
+    # Validation must stay clean -- it's what best.pt is selected on, so
+    # augmenting it would make "best" mean "best on artificially varied
+    # backgrounds" instead of "best on this warehouse's real val images".
     val_dataset = LocoDataset(Path(data["raw_dir"]), split="validation")
     if train_dataset.category_labels != val_dataset.category_labels:
         raise ValueError("Training and validation splits define different categories")
