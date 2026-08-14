@@ -8,6 +8,10 @@ train:
   epochs: 20
   batch_size: 4
   learning_rate: 0.005
+  lr_final_fraction: 0.01
+  warmup_epochs: 3
+  freeze_backbone_epochs: 5
+  freeze_backbone_layers: 11
   momentum: 0.9
   weight_decay: 0.0005
   num_workers: 0
