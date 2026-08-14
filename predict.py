@@ -71,7 +71,8 @@ def main() -> None:
     if args.num_images < 1:
         parser.error("Number of images must be at least 1")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_yolo_model(dataset.num_classes)
+    checkpoint = config.get("model", {}).get("checkpoint", "yolo26s.pt")
+    model = create_yolo_model(dataset.num_classes, checkpoint=checkpoint)
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
     model.to(device)
     model.eval()

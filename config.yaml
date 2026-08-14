@@ -1,6 +1,9 @@
 data:
   raw_dir: dataset
 
+model:
+  checkpoint: yolo26n.pt
+
 train:
   epochs: 20
   batch_size: 4

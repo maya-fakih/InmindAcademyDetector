@@ -49,7 +49,8 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_yolo_model(train_dataset.num_classes).to(device)
+    checkpoint = config.get("model", {}).get("checkpoint", "yolo26s.pt")
+    model = create_yolo_model(train_dataset.num_classes, checkpoint=checkpoint).to(device)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
         params,
