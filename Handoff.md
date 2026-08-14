@@ -59,3 +59,17 @@ Papers:
   then wire it into `yolo_wrapper.py` if it checks out.
 - Run `dedup_check.py` on the final merged export before any training.
 - Actually train yolo26n on the merged set, then fine-tune on LOCO.
+- Port the freeze/warmup/cosine-LR fix from `yolo26s-coco` (commits
+  cc15ea7, cb63f31, 1246b08, 3b6c641) once that branch's run confirms
+  the recipe works -- same diagnosis applies here: an unfrozen head at
+  flat LR from epoch 0 drags pretrained weights around regardless of
+  which checkpoint they came from.
+
+## Update: paused on GPU-hour cap
+Hit a Colab GPU quota while iterating on `yolo26s-coco`. Resuming on a
+fresh Colab account -- nothing server-side changes here, this branch's
+5 commits are already pushed and waiting. Note for whoever continues:
+CI (`ruff format --check .`) also validates Python code fences inside
+markdown files, not just `.py` -- caught and fixed once already in
+ROBOFLOW.md (commit f435ca2); worth double-checking any new `.md` edits
+the same way before pushing.
