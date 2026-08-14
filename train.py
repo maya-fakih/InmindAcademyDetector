@@ -112,7 +112,6 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     if freeze_layers > 0:
         set_backbone_frozen(model, freeze_layers, frozen=backbone_frozen)
 
-
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
         params,
