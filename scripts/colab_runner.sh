@@ -30,16 +30,21 @@ BRANCH="yolo26s-coco"
 REPO_DIR="InmindAcademyDetector"
 
 # --- 1. Clone or update -----------------------------------------------------
-if [[ -d "$REPO_DIR/.git" ]]; then
+if [[ -f "train.py" && -f "config.yaml" ]]; then
+    # Already running from inside a checkout of this repo (e.g. the calling
+    # cell already cloned it) -- don't clone again into a nested subfolder.
+    echo "[setup] already inside a repo checkout, skipping clone"
+elif [[ -d "$REPO_DIR/.git" ]]; then
     echo "[setup] repo already present, pulling latest..."
     git -C "$REPO_DIR" fetch origin "$BRANCH"
     git -C "$REPO_DIR" checkout "$BRANCH"
     git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
+    cd "$REPO_DIR"
 else
     echo "[setup] cloning repo..."
     git clone --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
+    cd "$REPO_DIR"
 fi
-cd "$REPO_DIR"
 
 # --- 2. Install dependencies -------------------------------------------------
 if ! command -v uv >/dev/null 2>&1; then
