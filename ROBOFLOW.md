@@ -52,6 +52,7 @@ TUM LOCO images, which could silently include subset-1/4 holdout images.
    against it before using it for real:
    ```python
    from models.class_weight_transfer import list_candidate_tensors
+
    print(list_candidate_tensors(pretrained_model, num_classes=5))
    ```
    Confirm these are actually the classification output layers (not
