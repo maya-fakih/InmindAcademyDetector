@@ -3,9 +3,33 @@
 ## Where we are
 Base fixes ported from yolo26s-coco: `num_workers: 0` (2 caused OOM-kills
 on Colab free tier), config-driven checkpoint (`checkpoint: yolo26n.pt`),
-per-epoch loss breakdown logging. No dataset ingestion or training run
-started on this branch yet -- everything below is infrastructure staged
-ahead of the actual Roboflow work.
+per-epoch loss breakdown logging, freeze/warmup/cosine-LR (`config.yaml`
+already has `warmup_epochs`/`freeze_backbone_epochs`/`freeze_backbone_layers`/
+`lr_final_fraction` set to yolo26s-coco's tuned values), explicit-resume-flag
+safety in `colab_runner.sh`, and the background-swap/hflip augmentation
+machinery (`augmentation.py`, wired into `LocoDataset` and `train.py` --
+same train-only/validation-forced-off safety as yolo26s-coco). `augment`
+is not enabled in this branch's `config.yaml` yet (no `augment:` section) --
+add one when actually training LOCO fine-tuning here; it's dormant until
+then. Ported via cherry-pick, one manual merge conflict (checkpoint-selection
+vs. resume/freeze logic in `train.py`, both kept) -- verified: nano
+checkpoint still builds correctly (2.5M params) through config, `ruff
+format`/`ruff check` both pass.
+
+No Roboflow dataset ingestion or training run started on this branch yet --
+Roboflow class distribution has been checked (real counts, screenshot):
+forklift 11,295, pallet 83,407, pallet_truck 9,264, small_load_carrier
+24,853, stillage 7,022 -- ~12:1 max:min ratio, much better than LOCO alone's
+144:1 forklift problem.
+
+**Next real gap**: `train.py`/`LocoDataset` only understand LOCO's COCO-JSON
+format (`loco-sub*-v1-*.json`) -- a Roboflow YOLO-format export (images +
+per-image `.txt` label files) needs either a new dataset loader class or a
+conversion step before any of this branch's training machinery can touch
+it. Not built yet. See `ROBOFLOW.md` step 5 for the originally-suggested
+plain-Ultralytics-CLI alternative, which sidesteps this but doesn't get the
+freeze/warmup/logging benefits just ported here -- worth deciding which
+path before writing more code.
 
 See `ROBOFLOW.md` for the full dataset-merge plan and steps in order.
 
