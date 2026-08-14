@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from ultralytics.utils import ops
+from ultralytics.utils.nms import non_max_suppression
 
 
 def letterbox(image_CHW: torch.Tensor, size: int = 640) -> tuple[torch.Tensor, float, float, float]:
@@ -31,7 +31,7 @@ def decode_predictions(
 ) -> list[dict]:
     """Convert raw YOLO head output into Torchvision-style detection dicts,
     with boxes remapped from letterboxed space back to original image space."""
-    results = ops.non_max_suppression(raw_output, conf_thres=conf_thres, iou_thres=iou_thres)
+    results = non_max_suppression(raw_output, conf_thres=conf_thres, iou_thres=iou_thres)
     predictions = []
     for detections, (scale, left, top) in zip(results, transforms, strict=True):
         boxes = detections[:, :4].clone()
