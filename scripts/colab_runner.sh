@@ -85,6 +85,10 @@ if [[ -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
 fi
 
 echo "[train] starting training (see train.log for full output)..."
+export MPLBACKEND=Agg  # Colab exports MPLBACKEND=matplotlib_inline's backend globally, but
+                        # that package isn't in this project's uv venv -- matplotlib (pulled
+                        # in by torchmetrics) then fails to import. Nothing here needs
+                        # interactive plots, so force a headless backend instead.
 uv run train.py --config colab_config.yaml $RESUME_FLAG 2>&1 | tee train.log
 
 # --- 5. Evaluate the best checkpoint -----------------------------------------
