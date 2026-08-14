@@ -50,10 +50,15 @@ echo "[setup] syncing dependencies..."
 uv sync --quiet
 
 # --- 3. Dataset + checkpoints on Drive (survives disconnects) ---------------
-python3 -c "
-from google.colab import drive
-drive.mount('/content/drive')
-"
+# NOTE: drive.mount() must be called from an actual Colab notebook cell, not
+# from a subprocess spawned by this script -- it needs the Colab kernel
+# connection, which a `python3 -c ...` child process doesn't have. Mount
+# Drive yourself in the cell BEFORE running this script; we just check it.
+if [[ ! -d "/content/drive/MyDrive" ]]; then
+    echo "[error] Drive isn't mounted. Run this in a cell first, then rerun this script:" >&2
+    echo "  from google.colab import drive; drive.mount('/content/drive')" >&2
+    exit 1
+fi
 DRIVE_ROOT="/content/drive/MyDrive/InmindAcademyDetector-${BRANCH}"
 DATA_DIR="${DRIVE_ROOT}/dataset"
 RUNS_DIR="${DRIVE_ROOT}/runs/baseline"
