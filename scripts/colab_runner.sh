@@ -2,21 +2,35 @@
 # Paste into a single Colab cell as:  !bash scripts/colab_runner.sh
 # Or run from a terminal cell after `%cd InmindAcademyDetector`.
 #
+# Usage:
+#   !bash scripts/colab_runner.sh          -- fresh run (default)
+#   !bash scripts/colab_runner.sh resume   -- resume from weights/last.ckpt on Drive
+#
+# A fresh run never touches an existing checkpoint's training state, but if a
+# previous run's weights/ directory exists it gets moved aside first (renamed
+# with a timestamp) instead of being silently overwritten -- so switching
+# training regimes (e.g. adding freeze/warmup) doesn't accidentally resume
+# from or clobber a run trained under the old settings.
+#
 # What it does, in order:
 #   1. Clone/pull the repo (idempotent — safe to rerun after a disconnect).
 #   2. Install dependencies with uv.
 #   3. Mount Drive; dataset + checkpoints persist under
 #      MyDrive/InmindAcademyDetector-${BRANCH}/, not the ephemeral VM disk.
-#   4. Train for config.yaml's epoch count, auto-resuming from
-#      weights/last.ckpt on Drive if a previous run left one behind — so
-#      if Colab disconnects overnight, rerunning this same cell picks up
-#      where it left off instead of starting over.
+#   4. Train for config.yaml's epoch count -- resuming only if "resume" was
+#      passed as the first argument and weights/last.ckpt exists on Drive.
 #   5. Evaluate the best checkpoint on subsets 1/4 once training finishes.
 #
 # Everything is logged to train.log / eval.log so you can check progress or
 # read the full output in the morning even if the cell itself scrolled away.
 
 set -euo pipefail
+
+MODE="${1:-fresh}"
+if [[ "$MODE" != "fresh" && "$MODE" != "resume" ]]; then
+    echo "[error] first argument must be 'resume' or omitted (defaults to fresh)" >&2
+    exit 1
+fi
 
 # This repo is private — set GITHUB_TOKEN before running, e.g. in a Colab cell:
 #   from google.colab import userdata
@@ -82,11 +96,20 @@ with open('colab_config.yaml', 'w') as f:
     yaml.safe_dump(config, f, sort_keys=False)
 "
 
-# --- 4. Train (auto-resume if a checkpoint from a previous attempt exists) --
+# --- 4. Train (resume only if explicitly requested) --------------------------
 RESUME_FLAG=""
-if [[ -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
-    echo "[train] found an existing last.ckpt on Drive — resuming instead of starting over"
+if [[ "$MODE" == "resume" ]]; then
+    if [[ ! -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
+        echo "[error] resume requested but no ${RUNS_DIR}/weights/last.ckpt found" >&2
+        exit 1
+    fi
+    echo "[train] resume requested — continuing from last.ckpt"
     RESUME_FLAG="--resume last"
+elif [[ -d "${RUNS_DIR}/weights" ]]; then
+    BACKUP_DIR="${RUNS_DIR}/weights-backup-$(date +%Y%m%d-%H%M%S)"
+    echo "[train] fresh run requested but weights/ already exists — moving it to"
+    echo "        $BACKUP_DIR instead of overwriting"
+    mv "${RUNS_DIR}/weights" "$BACKUP_DIR"
 fi
 
 echo "[train] starting training (see train.log for full output)..."
