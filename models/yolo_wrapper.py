@@ -78,6 +78,6 @@ class YoloWrapper(nn.Module):
         return dict(zip(loss_names, total_loss, strict=True))
 
 
-def create_yolo_model(num_classes: int, checkpoint: str = "yolo26s.pt") -> nn.Module:
+def create_yolo_model(num_classes: int, checkpoint: str = "yolo26n.pt") -> nn.Module:
     """Create a YOLO model wrapper; ``num_classes`` includes background, YOLO has none."""
     return YoloWrapper(checkpoint, num_classes - 1)
