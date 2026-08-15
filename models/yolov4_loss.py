@@ -201,21 +201,39 @@ class Yolov4Loss(nn.Module):
                 target[batch_index, anchor_index, grid_j, grid_i, 1] = truth_y[
                     batch_index, label_index
                 ] - truth_y[batch_index, label_index].to(torch.int16).to(torch.float32)
+                # Clamp the log ratio's denominator input away from 0 -- an
+                # extremely small/degenerate box (post letterbox-scaling) would
+                # otherwise produce a huge-magnitude (though technically finite)
+                # log value, whose gradient can be large enough to blow up the
+                # loss in a single step and NaN-poison every later batch.
                 target[batch_index, anchor_index, grid_j, grid_i, 2] = torch.log(
-                    truth_w[batch_index, label_index] / masked_anchors[anchor_index, 0] + 1e-16
+                    torch.clamp(
+                        truth_w[batch_index, label_index] / masked_anchors[anchor_index, 0],
+                        min=1e-4,
+                    )
                 )
                 target[batch_index, anchor_index, grid_j, grid_i, 3] = torch.log(
-                    truth_h[batch_index, label_index] / masked_anchors[anchor_index, 1] + 1e-16
+                    torch.clamp(
+                        truth_h[batch_index, label_index] / masked_anchors[anchor_index, 1],
+                        min=1e-4,
+                    )
                 )
                 target[batch_index, anchor_index, grid_j, grid_i, 4] = 1
                 class_id = int(labels[batch_index, label_index, 4])
                 target[batch_index, anchor_index, grid_j, grid_i, 5 + class_id] = 1
+                # A box that overshoots the letterboxed image (common in raw COCO-style
+                # annotations that round outside the true edge) can push this ratio
+                # above 2, making the sqrt argument negative -> NaN, which then
+                # poisons every subsequent batch via backprop. Clamp to >= 0.
                 tgt_scale[batch_index, anchor_index, grid_j, grid_i, :] = torch.sqrt(
-                    2
-                    - truth_w[batch_index, label_index]
-                    * truth_h[batch_index, label_index]
-                    / feature_size
-                    / feature_size
+                    torch.clamp(
+                        2
+                        - truth_w[batch_index, label_index]
+                        * truth_h[batch_index, label_index]
+                        / feature_size
+                        / feature_size,
+                        min=0.0,
+                    )
                 )
         return obj_mask, tgt_mask, tgt_scale, target
 

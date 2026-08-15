@@ -214,8 +214,18 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             losses = model(images_L, targets_L)
             loss = sum(losses.values())
 
+            if not torch.isfinite(loss):
+                # A single degenerate batch can still produce a NaN/inf loss despite
+                # the clamps in yolov4_loss.py -- backpropagating it would poison
+                # every weight for the rest of training. Skip this batch instead of
+                # crashing the whole (possibly hours-long) run over one bad batch.
+                print(f"  [warn] non-finite loss ({loss.item()}) at step {step} -- skipping batch")
+                optimizer.zero_grad()
+                continue
+
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
             optimizer.step()
             epoch_loss += loss.item()
             for name, value in losses.items():
