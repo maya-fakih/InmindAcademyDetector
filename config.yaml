@@ -1,6 +1,10 @@
 data:
   raw_dir: dataset
 
+model:
+  architecture: yolov4-tiny  # or "ultralytics"
+  checkpoint: null  # Darknet .weights path (yolov4-tiny only); null = random init
+
 train:
   epochs: 100
   batch_size: 4
@@ -11,7 +15,7 @@ train:
   freeze_backbone_layers: 11
   momentum: 0.9
   weight_decay: 0.0005
-  num_workers: 0
+  num_workers: 4
   seed: 0
 
 augment:

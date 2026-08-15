@@ -37,7 +37,11 @@ def set_backbone_frozen(model: torch.nn.Module, num_layers: int, frozen: bool) -
 
     Layer indices match the printed model summary (Conv/C3k2/.../C2PSA at index 10
     is the last backbone block; freeze_backbone_layers=11 covers layers 0-10).
+    Only applies to the Ultralytics wrapper's `model.model.model` layer stack; other
+    architectures (e.g. yolov4-tiny) don't expose that structure and are skipped.
     """
+    if not hasattr(model, "model") or not hasattr(model.model, "model"):
+        return
     for index, layer in enumerate(model.model.model):
         if index >= num_layers:
             break
@@ -101,7 +105,12 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
         start_epoch = checkpoint["epoch"] + 1
 
-    model = create_yolo_model(train_dataset.num_classes).to(device)
+    model_settings = config.get("model", {})
+    model = create_yolo_model(
+        train_dataset.num_classes,
+        checkpoint=model_settings.get("checkpoint") or "yolo26n.pt",
+        architecture=model_settings.get("architecture", "ultralytics"),
+    ).to(device)
 
     freeze_epochs = settings.get("freeze_backbone_epochs", 0)
     freeze_layers = settings.get("freeze_backbone_layers", 0)

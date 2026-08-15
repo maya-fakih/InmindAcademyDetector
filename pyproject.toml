@@ -25,7 +25,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["AcademyObjectDetection.ipynb"]
+exclude = ["AcademyObjectDetection.ipynb", "vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
