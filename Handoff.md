@@ -1,158 +1,96 @@
-# Handoff (yolo26s-coco branch)
+# Handoff (yolov4t-loco branch)
 
-## Latest: background-swap augmentation + 100-epoch convergence run
+## Status: ready to launch a training run on Colab, one prerequisite step first
 
-### Why
-The freeze/warmup 50-epoch run (see below) hit val_mAP50 = 0.3048 but only
-0.1120 on the real test subsets (1/4) -- a bad val/test gap. The LOCO
-dataset's own paper explains the likely mechanism directly: train (subsets
-2/3/5) and test (subsets 1/4) are **different physical warehouses** by
-design --
+The previous Handoff.md in this branch was stale -- it described the branch
+as "not yet pushed, start from scratch" when in fact 4 more commits had
+already landed (vendoring, train.py wiring, pretrained backbone + anchor
+tooling, colab script). This doc replaces it with what's actually true as of
+commit `c456fea`.
 
-> "we use subsets to perform the training and evaluation split, since each
-> of them corresponds to one particular logistics environment. This
-> guarantees that the training and evaluation sets are disjoint from each
-> other, which implicitly shifts the focus in machine-learning applications
-> towards generalizable models, since certain conditions (i.e. scene,
-> lighting, color) may have not been encountered in the training set."
-> -- Mayershofer, C., Holm, D.-M., Molter, B., Fottner, J. "LOCO: Logistics
-> Objects in Context." IEEE ICMLA 2020.
-> https://mediatum.ub.tum.de/doc/1578845/ndh526owvo3yhfqcaw2qypl5g.201007-loco-ieee-compressed.pdf
+## What's proven, with real forward/backward runs (not guessed)
+- `Darknet('vendor/pytorch_yolov4/yolov4-tiny.cfg')` builds correctly:
+  5,883,356 params (matches expected size once heads are resized from
+  COCO's 80 classes to LOCO's 5 -- filters=30 not 255, confirmed in the
+  cfg itself).
+- `models/yolov4_loss.py`'s `Yolov4Loss` -- previously never run at all,
+  despite already being wired into `Yolov4TinyWrapper` -- now has a real
+  test (`tests/test_yolov4_loss.py`) that: runs a full forward pass on
+  synthetic images/labels, confirms both head shapes ((2,30,13,13) and
+  (2,30,26,26)), confirms the total loss is finite, calls `.backward()`
+  and confirms every one of the model's 61 param tensors receives a
+  gradient (not just some), and confirms a batch with zero labeled
+  objects doesn't crash. All passing.
+- `Yolov4TinyWrapper` (in `models/yolo_wrapper.py`) matches `YoloWrapper`'s
+  interface: `forward(images, targets) -> loss dict` in training mode,
+  `forward(images) -> list[{boxes, scores, labels}]` in eval mode.
+  `train.py` dispatches on `model.architecture` in config.yaml, already
+  wired (`create_yolo_model(..., architecture=...)`).
 
-That's the dataset's own stated design goal, not a separate paper's
-critique -- if the model is keying off background/scene context (warehouse
-lighting, floor color, rack layout) rather than the objects themselves,
-performance should drop exactly this way when the test warehouses are ones
-it's never seen. I did not find a paper making this exact background-bias
-claim about LOCO specifically beyond the original paper's own framing above;
-said so rather than inventing a stronger citation.
+## Two real bugs found and fixed this session
+1. **`scripts/colab_runner.sh`** accepted a branch name as `$2` but then
+   immediately overwrote it with a hardcoded `BRANCH="yolo26s-coco"` two
+   lines later -- passing any other branch name silently did nothing. This
+   is why the training log you had showed it running yolo26s-coco even
+   after intending to run this branch. Fixed: the hardcoded line is gone,
+   `${2:-yolo26s-coco}` is respected.
+2. **`eval.py` / `predict.py`** called `create_yolo_model(dataset.num_classes)`
+   with no `architecture` argument, so they always defaulted to
+   `"ultralytics"` regardless of `config.yaml` -- would have tried to
+   build/fetch a yolo26n checkpoint and then failed (or silently
+   mismatched) on `load_state_dict()` instead of loading real trained
+   yolov4-tiny weights. Fixed: both now read `model.architecture` from
+   config, same as train.py.
 
-### What changed
-- `augmentation.py` (new) -- `random_horizontal_flip` and
-  `random_background_swap`. The latter keeps an image's labeled objects
-  (exact pixels, so boxes stay valid) but replaces everything outside those
-  boxes with a different training image's background, directly attacking
-  the background-context shortcut. Verified with synthetic array tests:
-  box-remap math for hflip, and that the object region survives a swap
-  pixel-for-pixel while the rest becomes the donor's content.
-  **Known limitation, stated not hidden**: the donor's own labeled objects
-  aren't masked out of the donor background, so a donor object can bleed
-  into the composited image. Worth revisiting if this augmentation helps
-  overall but seems to add label noise.
-- `dataset.py` -- `LocoDataset` takes `background_swap_prob`/`hflip_prob`,
-  applied in `__getitem__` before tensor conversion. **Validation and test
-  splits force these to 0 regardless of what's passed in** (checked in
-  `__init__`) -- `best.pt` selection must stay on clean, real val images,
-  not augmented ones, or "best" stops meaning what it should.
-- `train.py` -- reads `augment.enabled`/`background_swap_prob`/`hflip_prob`
-  from config, passed only to the train split.
-- `config.yaml` -- `augment.enabled: true`, both probs 0.5; `epochs: 100`
-  (up from 50) to see whether mAP keeps climbing or plateaus/overfits by
-  epoch 100 -- the freeze/warmup run was still rising at epoch 50, hadn't
-  converged.
+## One prerequisite left before a real training run
+`vendor/pytorch_yolov4/yolov4-tiny.cfg` still has the **stock COCO-pretrained
+anchors** (`10,14, 23,27, 37,58, 81,82, 135,169, 344,319`), not LOCO-specific
+ones. `scripts/cluster_anchors.py` exists and is written to re-cluster them
+on LOCO's actual box shapes (subsets 2/3/5 only, per the project's own
+holdout rule), but it was never run against the real dataset -- the sandbox
+that wrote it had no network access to LOCO. This is stated honestly in that
+commit's message, not hidden.
 
-### Verification performed here (no live Colab/GPU in this sandbox)
-- `random_horizontal_flip`/`random_background_swap` unit-tested on
-  synthetic numpy arrays (box remap correctness, object-region pixel
-  preservation under swap).
-- `LocoDataset` end-to-end tested against a synthetic mini COCO-format
-  dataset: augmented `__getitem__` returns correct shapes, and validation
-  split's aug probs are confirmed forced to 0 even when 1.0 is passed in.
-- `ruff format --check .` and `ruff check .` both pass.
-- **Not verified here**: an actual multi-epoch training run with
-  augmentation on, since that needs the real LOCO images + a GPU. First
-  real signal is whatever epoch 1 looks like on Colab -- if loss/mAP
-  behave wildly differently from the un-augmented runs, stop and diagnose
-  before trusting a full 100-epoch run to it.
+**Run this on Colab before training, and commit the result:**
+```
+python scripts/cluster_anchors.py --raw-dir <path-to-loco> --write
+git add vendor/pytorch_yolov4/yolov4-tiny.cfg
+git commit -m "chore: re-cluster yolov4-tiny anchors on real LOCO box shapes"
+git push origin yolov4t-loco
+```
+Training on stock COCO anchors would still run and probably still learn
+something, but mAP would likely be measurably worse than with anchors sized
+for LOCO's actual object shapes (small warehouse objects, different aspect
+ratios than COCO). Not a hard blocker, but don't skip it if you have a
+minute -- it's cheap and the whole point of doing this branch is a fair,
+deliberate comparison.
 
-### Left to do
-- Run this on Colab: `bash scripts/colab_runner.sh` (fresh run, no
-  `resume` arg -- old checkpoints were trained without augmentation).
-- Watch val_mAP50 through ~epoch 50 vs the un-augmented run's 0.3048 at the
-  same point -- if augmentation is actively hurting (worse, not better),
-  turn off `augment.enabled` rather than pushing through 100 epochs on a
-  regression.
-- At 100 epochs: check whether mAP plateaus (real convergence signal) vs.
-  still climbing (would suggest even more epochs might help) vs. dropping
-  late (overfitting despite augmentation).
-- If the val/test gap doesn't close, background bias may not be the whole
-  story -- also worth checking image resolution/scale mismatch between
-  subsets, and whether class distribution genuinely differs across
-  warehouses beyond what `compute_balanced_split` already corrects for
-  (that function only balances within 2/3/5, not against 1/4's actual
-  distribution, which it can't see by design).
+## Launch command (once anchors are re-clustered)
+```
+!bash scripts/colab_runner.sh fresh yolov4t-loco
+```
+Note the explicit `yolov4t-loco` -- this is now required to hit the right
+branch (see bug #1 above); omitting it defaults to `yolo26s-coco`.
 
-## Status
-Not yet run under the new regime — a GPU-hour cap hit mid-transition,
-resuming on a fresh Colab account with the same repo/branches (nothing
-server-side changes; just remount Drive and reset the GH_TOKEN secret
-on the new account).
+`config.yaml` on this branch: `epochs: 100` (matches the yolo26n run for a
+fair comparison), `augment.enabled: true` (background-swap + hflip, same
+augmentation pipeline as yolo26s-coco once that branch's run finishes and
+its result is known -- if background-swap turns out to hurt there, consider
+whether to also disable it here before committing to a full 100-epoch run).
 
-## What changed and why
-Original 20-epoch run (COCO-pretrained yolo26s -> LOCO, whole model
-unfrozen from epoch 0, flat LR) converged to mAP@0.5 = 0.0274 -- behaving
-like retraining from scratch, not fine-tuning. Diagnosed cause: a
-randomly reinitialized classification head (only `cv3`/class-count-
-dependent tensors fail to transfer -- confirmed from the Colab log,
-"Transferred 696/708 items from pretrained weights") sends large, noisy
-gradients back through the pretrained backbone before the head has
-calibrated, dragging good weights off their pretrained initialization.
-
-Correction to an earlier (wrong) claim in this file: previously said
-the *entire* head reinitializes on class-count mismatch. It doesn't --
-only the classification branch does; box-regression layers transfer
-fine since their shape doesn't depend on class count.
-
-Fix, following Ultralytics' own fine-tuning guidance:
-- `freeze_backbone_epochs: 5`, `freeze_backbone_layers: 11` -- freeze
-  layers 0-10 (backbone through the C2PSA block, per the printed model
-  summary) for the first 5 epochs so only the head adapts initially.
-- `warmup_epochs: 3` -- linear LR ramp 0 -> base LR.
-- `lr_final_fraction: 0.01` -- cosine decay to 1% of base LR by the
-  final epoch.
-- `epochs: 50` for this run (up from 20).
-
-Implemented in `train.py`: `compute_lr()` and `set_backbone_frozen()`.
-Freeze mechanism verified live on Colab before trusting it for a full
-run: `120/366 params frozen` when called on a real model instance --
-confirms the `model.model.model` layer-indexing assumption was correct
-(this couldn't be checked from the sandbox alone, no live model there).
-
-## colab_runner.sh change
-Previously auto-resumed from any `weights/last.ckpt` found on Drive.
-That would've silently skipped the freeze/warmup window (keyed to
-epochs 0-5) and built on backbone weights already perturbed by the old
-run. Now requires an explicit argument:
-- `bash scripts/colab_runner.sh` -- fresh run (default). Backs up any
-  existing `weights/` dir with a timestamp instead of overwriting it.
-- `bash scripts/colab_runner.sh resume` -- resumes from `last.ckpt`,
-  errors if none exists.
-
-**Run this one fresh, no resume argument** -- the old checkpoint was
-trained under the flawed regime and shouldn't be built on.
-
-## CI note
-Caught late (should've checked from the first commit): `ruff format`
-also validates Python fences inside markdown files, not just `.py`
-files. Costed one extra fix commit on the roboflow branch. Now running
-`ruff format --check .` and `ruff check .` on every branch before every
-push, no exceptions. Can't run `pytest` from this sandbox (no torch
-available) -- that layer of CI stays unverified by me locally; said so
-explicitly rather than assuming it's fine.
-
-## Papers / row-transfer note
-Row-level class weight transfer (Kuen et al. ICCV 2019; arXiv
-1912.06185) does NOT apply to this branch -- LOCO's 5 classes
-(`forklift`, `pallet`, `pallet_truck`, `small_load_carrier`, `stillage`)
-don't match any of COCO's 80 classes by name, so there's no valid row
-mapping to transfer. That work is scoped to `yolo26-roboflow` instead,
-where a real logistics-domain pretrain source exists. See that branch's
-Handoff.md and ROBOFLOW.md.
-
-## Left to do
-- Run the 50-epoch fresh fine-tune (see command above) once GPU access
-  is back.
-- Target: mAP@0.5 >= 0.5. If freeze/warmup alone doesn't get there,
-  next levers to check: batch_size (currently 4, very small/noisy --
-  bump if a bigger Colab GPU is available), and whether `num_workers: 0`
-  is still limiting throughput on the new account's GPU tier.
+## Left to do after this run finishes
+- `eval.py` on subsets 1/4 (colab_runner.sh does this automatically at the
+  end of the run).
+- Write `BRANCH.md`: papers (Savas & Hinckeldeyn arXiv 2209.13499 -- 49.98%
+  YOLOv4-tiny under an easier split than ours; original LOCO paper 22.1%
+  YOLOv4-tiny under a split closer to ours), GFLOPs/params comparison table
+  (YOLOv4-tiny: 6.9 GFLOPs / 6.06M full-COCO-class params vs baseline
+  Faster R-CNN: 23.825 GFLOPs / 18.95M params -- YOLOv4-tiny is lighter on
+  both axes even before considering our 5-class head is smaller still).
+- Honest caveat to keep stating in BRANCH.md: this is architecturally
+  equivalent to YOLOv4-tiny (same .cfg, same official pretrained backbone
+  loadable), not literally Darknet-C's codebase. The loss was adapted from
+  Tianxiaomo/pytorch-YOLOv4's `Yolo_loss` (generalized from its hardcoded
+  3-head/608px/9-anchor assumption to this project's 2-head/416px/6-anchor
+  one) -- now numerically verified via `tests/test_yolov4_loss.py`, not
+  just copy-pasted and trusted.
