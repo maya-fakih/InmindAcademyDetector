@@ -59,7 +59,16 @@ def main() -> None:
         collate_fn=collate_fn,
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_yolo_model(dataset.num_classes)
+    # Only the architecture matters here, not `checkpoint` -- the line below
+    # immediately overwrites every weight with the trained checkpoint being
+    # evaluated, so there's no reason to also fetch/load a pretrained starting
+    # point. Leaving `checkpoint` at its default ("yolo26n.pt") is safe for
+    # both branches: create_yolo_model maps that exact default to
+    # `weights_path=None` for yolov4-tiny, skipping the backbone-only file.
+    model_settings = config.get("model", {})
+    model = create_yolo_model(
+        dataset.num_classes, architecture=model_settings.get("architecture", "ultralytics")
+    )
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
     model.to(device)
 
