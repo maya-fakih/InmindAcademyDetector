@@ -8,8 +8,8 @@ model:
   checkpoint: weights/yolov4-tiny.conv.29
 
 train:
-  epochs: 300
-  test_eval_every: 50  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
+  epochs: 50
+  test_eval_every: 25  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01

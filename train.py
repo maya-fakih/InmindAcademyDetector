@@ -35,18 +35,34 @@ def compute_lr(
 def set_backbone_frozen(model: torch.nn.Module, num_layers: int, frozen: bool) -> None:
     """Freeze or unfreeze the first `num_layers` layers of the underlying YOLO backbone.
 
-    Layer indices match the printed model summary (Conv/C3k2/.../C2PSA at index 10
-    is the last backbone block; freeze_backbone_layers=11 covers layers 0-10).
-    Only applies to the Ultralytics wrapper's `model.model.model` layer stack; other
-    architectures (e.g. yolov4-tiny) don't expose that structure and are skipped.
+    Ultralytics wrapper: layer indices match the printed model summary (Conv/C3k2/
+    .../C2PSA at index 10 is the last backbone block; freeze_backbone_layers=11
+    covers layers 0-10). Applies to `model.model.model`'s layer stack.
+
+    Darknet (yolov4-tiny) wrapper: `num_layers` is ignored -- freezing is applied to
+    every module up to (not including) the first "yolo" detection-head block, since
+    that's the boundary between the pretrained backbone/neck (`yolov4-tiny.conv.29`)
+    and the from-scratch detection heads. Freezing an arbitrary layer count here
+    would risk either freezing into the heads or leaving backbone layers trainable.
     """
-    if not hasattr(model, "model") or not hasattr(model.model, "model"):
+    if hasattr(model, "model") and hasattr(model.model, "model"):
+        for index, layer in enumerate(model.model.model):
+            if index >= num_layers:
+                break
+            for parameter in layer.parameters():
+                parameter.requires_grad = not frozen
         return
-    for index, layer in enumerate(model.model.model):
-        if index >= num_layers:
-            break
-        for parameter in layer.parameters():
-            parameter.requires_grad = not frozen
+
+    if hasattr(model, "model") and hasattr(model.model, "blocks") and hasattr(model.model, "models"):
+        first_yolo_index = next(
+            (i for i, block in enumerate(model.model.blocks) if block["type"] == "yolo"),
+            len(model.model.blocks),
+        )
+        for index, layer in enumerate(model.model.models):
+            if index >= first_yolo_index:
+                break
+            for parameter in layer.parameters():
+                parameter.requires_grad = not frozen
 
 
 def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
@@ -130,6 +146,14 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     backbone_frozen = freeze_epochs > 0 and start_epoch < freeze_epochs
     if freeze_layers > 0:
         set_backbone_frozen(model, freeze_layers, frozen=backbone_frozen)
+        frozen_params = sum(
+            p.numel() for p in model.parameters() if not p.requires_grad
+        )
+        total_params = sum(p.numel() for p in model.parameters())
+        print(
+            f"[freeze] backbone_frozen={backbone_frozen} -- "
+            f"{frozen_params:,}/{total_params:,} params frozen"
+        )
 
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
