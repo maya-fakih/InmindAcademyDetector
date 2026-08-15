@@ -153,6 +153,12 @@ class Yolov4Loss(nn.Module):
         truth_h = (labels[:, :, 3] - labels[:, :, 1]) / stride
         truth_i = truth_x.to(torch.int16).cpu().numpy()
         truth_j = truth_y.to(torch.int16).cpu().numpy()
+        # A box center exactly on the image edge (e.g. x2 == image_size) maps to
+        # grid index == feature_size, one past the last valid cell -- clamp so it
+        # lands in the last cell instead of indexing out of bounds below (silent
+        # IndexError on CPU, opaque CUDA device-side assert on GPU).
+        truth_i = np.clip(truth_i, 0, feature_size - 1)
+        truth_j = np.clip(truth_j, 0, feature_size - 1)
 
         for batch_index in range(batch_size):
             n = int(num_labels_per_image[batch_index])
