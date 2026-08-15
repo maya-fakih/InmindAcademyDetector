@@ -10,15 +10,15 @@ model:
 train:
   epochs: 50
   test_eval_every: 25  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
-  batch_size: 32
-  learning_rate: 0.02  # scaled up ~4x with batch_size (linear scaling rule) to keep training dynamics similar
+  batch_size: 16
+  learning_rate: 0.01  # scaled with batch_size (linear scaling rule), still conservative
   lr_final_fraction: 0.01
   warmup_epochs: 3
   freeze_backbone_epochs: 5
   freeze_backbone_layers: 11
   momentum: 0.9
   weight_decay: 0.0005
-  num_workers: 2
+  num_workers: 1  # 2 workers + background-swap's donor-image loading OOM'd Colab's free-tier RAM
   seed: 0
 
 augment:
