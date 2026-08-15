@@ -2,9 +2,12 @@
 dataset/
 runs/
 wandb/
+weights/
 
 *.pt
 *.ckpt
+*.conv.29
+*.weights
 train.log
 eval.log
 

@@ -3,7 +3,9 @@ data:
 
 model:
   architecture: yolov4-tiny  # or "ultralytics"
-  checkpoint: null  # Darknet .weights path (yolov4-tiny only); null = random init
+  # COCO-pretrained backbone (first 29 conv layers) for yolov4-tiny; see
+  # scripts/download_yolov4tiny_backbone.sh. null = random init.
+  checkpoint: weights/yolov4-tiny.conv.29
 
 train:
   epochs: 100
