@@ -31,6 +31,7 @@ if [[ "$MODE" != "fresh" && "$MODE" != "resume" ]]; then
     echo "[error] first argument must be 'resume' or omitted (defaults to fresh)" >&2
     exit 1
 fi
+BRANCH="${2:-yolo26s-coco}"
 
 # This repo is private — set GITHUB_TOKEN before running, e.g. in a Colab cell:
 #   from google.colab import userdata
