@@ -94,7 +94,21 @@ class Yolov4TinyWrapper(nn.Module):
         super().__init__()
         self.model = Darknet(str(cfg_path))
         if weights_path is not None:
+            weights_file = Path(weights_path)
+            if not weights_file.is_file():
+                raise FileNotFoundError(f"Backbone weights not found at {weights_path}")
+            size_bytes = weights_file.stat().st_size
+            # yolov4-tiny.conv.29 is ~19.6MB; a partial/failed download would be far
+            # smaller and would otherwise load silently with no error and no log line.
+            if size_bytes < 1_000_000:
+                raise ValueError(
+                    f"Backbone weights at {weights_path} look truncated "
+                    f"({size_bytes:,} bytes, expected ~19.6MB) -- redownload before training"
+                )
             self.model.load_weights(weights_path)
+            print(f"[backbone] loaded pretrained weights from {weights_path} ({size_bytes:,} bytes)")
+        else:
+            print("[backbone] no weights_path given -- yolov4-tiny initialized RANDOMLY")
         self.image_size = self.model.width
         assert self.model.width == self.model.height, "only square net inputs are supported"
 
