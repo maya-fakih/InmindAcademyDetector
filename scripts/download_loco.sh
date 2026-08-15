@@ -2,6 +2,7 @@
 set -euo pipefail
 
 output_dir="${1:-dataset}"
+mkdir -p "$output_dir"
 download_url="${LOCO_DOWNLOAD_URL:-https://go.mytum.de/239870}"
 split_url="https://raw.githubusercontent.com/tum-fml/loco/main/rgb"
 annotations=(
