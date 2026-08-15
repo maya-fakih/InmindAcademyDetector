@@ -41,7 +41,6 @@ BRANCH="${2:-yolo26s-coco}"
 : "${GITHUB_TOKEN:?Set GITHUB_TOKEN to a repo-scoped GitHub token before running this script}"
 
 REPO_URL="https://${GITHUB_TOKEN}@github.com/maya-fakih/InmindAcademyDetector.git"
-BRANCH="yolo26s-coco"
 REPO_DIR="InmindAcademyDetector"
 
 # --- 1. Clone or update -----------------------------------------------------
