@@ -32,6 +32,30 @@ def compute_lr(
     return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
 
 
+def split_backbone_head_params(model: torch.nn.Module, num_layers: int):
+    """Split trainable params into (backbone_params, head_params) using the same
+    boundary logic as set_backbone_frozen, so the two can get different LRs."""
+    backbone_params, head_params = [], []
+
+    if hasattr(model, "model") and hasattr(model.model, "model"):
+        for index, layer in enumerate(model.model.model):
+            target = backbone_params if index < num_layers else head_params
+            target.extend(p for p in layer.parameters() if p.requires_grad)
+        return backbone_params, head_params
+
+    if hasattr(model, "model") and hasattr(model.model, "blocks") and hasattr(model.model, "models"):
+        first_yolo_index = next(
+            (i for i, block in enumerate(model.model.blocks) if block["type"] == "yolo"),
+            len(model.model.blocks),
+        )
+        for index, layer in enumerate(model.model.models):
+            target = backbone_params if index < first_yolo_index else head_params
+            target.extend(p for p in layer.parameters() if p.requires_grad)
+        return backbone_params, head_params
+
+    return [], [p for p in model.parameters() if p.requires_grad]
+
+
 def set_backbone_frozen(model: torch.nn.Module, num_layers: int, frozen: bool) -> None:
     """Freeze or unfreeze the first `num_layers` layers of the underlying YOLO backbone.
 
@@ -186,8 +210,20 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             set_backbone_frozen(model, freeze_layers, frozen=False)
             backbone_frozen = False
             unfreeze_epoch = epoch
+            backbone_params, head_params = split_backbone_head_params(model, freeze_layers)
+            # Backbone gets a permanently lower LR (not just a temporary ramp) --
+            # standard discriminative fine-tuning. The earlier fix (a short LR
+            # ramp at full backbone LR) still let loss explode to ~1e25 within 5
+            # steps, because the backbone weights are pretrained/well-scaled while
+            # the head is still noisy after only a few epochs; gradients flowing
+            # back into the backbone through that noisy head were too large even
+            # at a fraction of the normal LR.
+            backbone_lr_mult = settings.get("backbone_lr_multiplier", 0.1)
             optimizer = SGD(
-                [parameter for parameter in model.parameters() if parameter.requires_grad],
+                [
+                    {"params": backbone_params, "lr_mult": backbone_lr_mult},
+                    {"params": head_params, "lr_mult": 1.0},
+                ],
                 lr=settings["learning_rate"],
                 momentum=settings["momentum"],
                 weight_decay=settings["weight_decay"],
@@ -211,7 +247,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             if epochs_since_unfreeze < reunfreeze_warmup_epochs:
                 current_lr *= (epochs_since_unfreeze + 1) / reunfreeze_warmup_epochs
         for param_group in optimizer.param_groups:
-            param_group["lr"] = current_lr
+            param_group["lr"] = current_lr * param_group.get("lr_mult", 1.0)
 
         epoch_start = time.perf_counter()
         model.train()
@@ -237,7 +273,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=10.0)
+            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
             optimizer.step()
             epoch_loss += loss.item()
             for name, value in losses.items():
