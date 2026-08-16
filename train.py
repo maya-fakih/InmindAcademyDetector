@@ -179,11 +179,13 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             f"best_map so far {best_map:.4f}"
         )
 
+    unfreeze_epoch = None
     for epoch in range(start_epoch, settings["epochs"]):
         if freeze_layers > 0 and backbone_frozen and epoch >= freeze_epochs:
             print(f"  [freeze] unfreezing backbone at epoch {epoch + 1}")
             set_backbone_frozen(model, freeze_layers, frozen=False)
             backbone_frozen = False
+            unfreeze_epoch = epoch
             optimizer = SGD(
                 [parameter for parameter in model.parameters() if parameter.requires_grad],
                 lr=settings["learning_rate"],
@@ -198,6 +200,16 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             settings["epochs"],
             settings.get("lr_final_fraction", 1.0),
         )
+        if unfreeze_epoch is not None:
+            # Millions of previously-frozen backbone params suddenly get gradients
+            # at whatever LR the main schedule happens to be at post-warmup -- that
+            # alone caused a loss explosion to ~1e26 within 4 steps in testing.
+            # Re-warm up for a few epochs after unfreezing, same idea as the
+            # original warmup but scoped to this transition.
+            reunfreeze_warmup_epochs = settings.get("post_unfreeze_warmup_epochs", 3)
+            epochs_since_unfreeze = epoch - unfreeze_epoch
+            if epochs_since_unfreeze < reunfreeze_warmup_epochs:
+                current_lr *= (epochs_since_unfreeze + 1) / reunfreeze_warmup_epochs
         for param_group in optimizer.param_groups:
             param_group["lr"] = current_lr
 
