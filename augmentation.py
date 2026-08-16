@@ -5,8 +5,10 @@ matching LocoDataset._load_raw's return format, and run before the image is
 converted to a CHW float tensor.
 """
 
+import random
+
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 
 def random_horizontal_flip(
@@ -20,6 +22,70 @@ def random_horizontal_flip(
         flipped_boxes[:, 0] = width - boxes[:, 2]
         flipped_boxes[:, 2] = width - boxes[:, 0]
     return flipped_image, flipped_boxes
+
+
+def random_color_jitter(
+    image_HWC: np.ndarray,
+    brightness_range: tuple[float, float] = (0.8, 1.2),
+    contrast_range: tuple[float, float] = (0.8, 1.2),
+    saturation_range: tuple[float, float] = (0.8, 1.2),
+) -> np.ndarray:
+    """Randomly perturb brightness/contrast/saturation. Boxes are untouched --
+    this is a pure appearance change, useful for LOCO's varied warehouse
+    lighting (different sites, times of day, artificial vs. natural light).
+    """
+    image = Image.fromarray(image_HWC)
+    image = ImageEnhance.Brightness(image).enhance(random.uniform(*brightness_range))
+    image = ImageEnhance.Contrast(image).enhance(random.uniform(*contrast_range))
+    image = ImageEnhance.Color(image).enhance(random.uniform(*saturation_range))
+    return np.asarray(image, dtype=np.uint8)
+
+
+def random_scale_jitter(
+    image_HWC: np.ndarray,
+    boxes: np.ndarray,
+    labels: np.ndarray,
+    scale_range: tuple[float, float] = (0.75, 1.3),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Zoom the image in/out around a random center, keeping the output the
+    same H/W (crop if zoomed in, pad if zoomed out) so downstream letterboxing
+    is unaffected. Boxes falling entirely outside the kept region are dropped
+    (with their labels) rather than left as degenerate zero-area boxes.
+
+    Motivation: LOCO objects appear at a wide range of distances/scales across
+    its warehouses; the model otherwise only ever sees each object's one
+    as-photographed scale.
+    """
+    height, width = image_HWC.shape[:2]
+    scale = random.uniform(*scale_range)
+    new_height, new_width = max(1, round(height * scale)), max(1, round(width * scale))
+    resized = np.asarray(Image.fromarray(image_HWC).resize((new_width, new_height), Image.BILINEAR))
+
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    # Where the resized image's top-left lands on the fixed-size canvas -- negative
+    # when zoomed in (we're cropping), positive when zoomed out (we're padding).
+    offset_y = random.randint(min(0, height - new_height), max(0, height - new_height))
+    offset_x = random.randint(min(0, width - new_width), max(0, width - new_width))
+
+    src_y0, src_x0 = max(0, -offset_y), max(0, -offset_x)
+    dst_y0, dst_x0 = max(0, offset_y), max(0, offset_x)
+    copy_h = min(new_height - src_y0, height - dst_y0)
+    copy_w = min(new_width - src_x0, width - dst_x0)
+    canvas[dst_y0 : dst_y0 + copy_h, dst_x0 : dst_x0 + copy_w] = resized[
+        src_y0 : src_y0 + copy_h, src_x0 : src_x0 + copy_w
+    ]
+
+    if boxes.shape[0] == 0:
+        return canvas, boxes, labels
+
+    jittered = boxes * scale
+    jittered[:, [0, 2]] += offset_x
+    jittered[:, [1, 3]] += offset_y
+    jittered[:, [0, 2]] = jittered[:, [0, 2]].clip(0, width)
+    jittered[:, [1, 3]] = jittered[:, [1, 3]].clip(0, height)
+
+    keep = (jittered[:, 2] - jittered[:, 0] > 1) & (jittered[:, 3] - jittered[:, 1] > 1)
+    return canvas, jittered[keep], labels[keep]
 
 
 def random_background_swap(

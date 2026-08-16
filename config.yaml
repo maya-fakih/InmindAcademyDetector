@@ -2,11 +2,18 @@ data:
   raw_dir: dataset
 
 train:
-  epochs: 100
+  epochs: 200  # was 100 -- extended for the warm restart below (see also results/yolo26n-coco-100-epochs)
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01
   warmup_epochs: 3
+  # SGDR-style warm restart on resume: --resume last past epoch 100 ramps LR back
+  # up to 30% of base_lr over 5 epochs (not the full base_lr -- the model already
+  # converged somewhat, a full jump risks the loss-explosion instability seen on
+  # yolov4t-loco when unfrozen params met a too-high LR) then cosine-decays to
+  # epoch 200. No effect on a fresh run or a plain same-target-epoch resume.
+  restart_peak_lr_fraction: 0.3
+  restart_warmup_epochs: 5
   freeze_backbone_epochs: 5
   freeze_backbone_layers: 11
   momentum: 0.9
@@ -16,8 +23,12 @@ train:
 
 augment:
   enabled: true
-  background_swap_prob: 0.5
+  background_swap_prob: 0.6  # bumped from 0.5 -- val/test gap (0.35 vs 0.156) points at
+                              # background/warehouse-specific overfitting; this augmentation
+                              # is the one most directly aimed at that gap
   hflip_prob: 0.5
+  scale_jitter_prob: 0.5
+  color_jitter_prob: 0.5
 
 output_dir: runs/baseline
 

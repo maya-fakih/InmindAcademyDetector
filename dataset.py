@@ -16,7 +16,12 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from augmentation import random_background_swap, random_horizontal_flip
+from augmentation import (
+    random_background_swap,
+    random_color_jitter,
+    random_horizontal_flip,
+    random_scale_jitter,
+)
 
 
 class DetectionTarget(TypedDict):
@@ -156,6 +161,8 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
         split: Literal["train", "validation", "test"],
         background_swap_prob: float = 0.0,
         hflip_prob: float = 0.0,
+        scale_jitter_prob: float = 0.0,
+        color_jitter_prob: float = 0.0,
     ) -> None:
         # Augmentation is train-only by construction: forcing these to 0 for
         # validation/test here (rather than trusting the caller) means a
@@ -163,6 +170,8 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
         # the numbers we report or select best.pt on.
         self.background_swap_prob = background_swap_prob if split == "train" else 0.0
         self.hflip_prob = hflip_prob if split == "train" else 0.0
+        self.scale_jitter_prob = scale_jitter_prob if split == "train" else 0.0
+        self.color_jitter_prob = color_jitter_prob if split == "train" else 0.0
         raw_dir = self._resolve_raw_dir(raw_dir, split)
         self.images: list[dict] = []
         self.image_paths: dict[int, Path] = {}
@@ -319,6 +328,14 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
 
         if random.random() < self.hflip_prob:
             image_HWC, boxes = random_horizontal_flip(image_HWC, boxes)
+
+        if boxes.shape[0] > 0 and random.random() < self.scale_jitter_prob:
+            labels_array = np.array(labels_N, dtype=np.int64)
+            image_HWC, boxes, labels_array = random_scale_jitter(image_HWC, boxes, labels_array)
+            labels_N = labels_array.tolist()
+
+        if random.random() < self.color_jitter_prob:
+            image_HWC = random_color_jitter(image_HWC)
 
         image_CHW = (
             rearrange(

@@ -156,3 +156,58 @@ Handoff.md and ROBOFLOW.md.
   next levers to check: batch_size (currently 4, very small/noisy --
   bump if a bigger Colab GPU is available), and whether `num_workers: 0`
   is still limiting throughput on the new account's GPU tier.
+
+## 2026-08-16 update: val/test gap found, augmentation + warm restart added
+
+100-epoch run finished (`results/yolo26n-coco-100-epochs`, once pushed):
+`val_mAP50` (split="validation", held-out slice of subsets 2/3/5, same
+warehouses as training) plateaued around **0.34-0.35** by epoch 90+, but
+`eval.py` on `split="test"` (subsets 1/4, genuinely different warehouses)
+came back at **0.156**. This is not a bug -- verified both use the same
+`create_yolo_model`/preprocessing path, and it's exactly the gap LOCO's
+train/test split is designed to expose (Mayershofer et al. 2020): the
+model is picking up warehouse-specific visual shortcuts (background,
+lighting, camera angle) that don't transfer. **`val_mAP50` in train.log
+is not a reliable proxy for the number that actually matters -- watch
+`eval.py`'s test-split number.**
+
+Two changes aimed directly at closing that gap, both only on this branch
+so far (not yet on `yolov4t-loco`, which needs the same treatment):
+
+1. **Scale + color jitter augmentation** (`augmentation.py`,
+   `random_scale_jitter`/`random_color_jitter`), wired into
+   `LocoDataset`/`train.py` via `augment.scale_jitter_prob`/
+   `color_jitter_prob`. Neither existed before -- only background-swap +
+   hflip did, neither of which teaches scale or lighting invariance.
+   `background_swap_prob` also bumped 0.5 -> 0.6 since it's the
+   augmentation most directly aimed at this exact background-shortcut
+   problem. Property-tested (200 random trials: output boxes always
+   in-bounds/positive-area/label-count-consistent) but **not yet
+   validated for effect on the actual val/test gap** -- that only
+   happens once a run with it enabled finishes.
+
+2. **SGDR-style warm restart on resume** (`compute_lr` in `train.py`,
+   gated by new `train.restart_peak_lr_fraction`/`restart_warmup_epochs`
+   config keys). `epochs` bumped 100 -> 200 so there's schedule left to
+   run. Deliberately NOT a naive "just raise `epochs` and resume" --
+   verified that naively resuming epoch 100 into a `total_epochs=200`
+   schedule jumps LR from ~5.1e-5 straight to ~2.6e-3 in a single step
+   (roughly 50x), which is the same kind of abrupt-LR-into-a-mostly-
+   converged-network situation that caused loss to explode to ~1e25/1e26
+   on `yolov4t-loco`'s backbone-unfreeze bug. Instead, LR ramps over
+   `restart_warmup_epochs` (5) up to only `restart_peak_lr_fraction`
+   (0.3) of base_lr, then cosine-decays to the new epoch 200. Verified
+   both the old fresh-run schedule and the naive-jump danger case match
+   expected math before landing this.
+
+**Honest expectation-setting:** no one can guarantee this hits 40%+ mAP
+on the test split without actually running it. The paper's own 40-46%
+for yolov4-tiny isn't even this model (yolo26n) -- it's a different
+architecture entirely, being pursued in parallel on `yolov4t-loco`. This
+run's job is to see whether augmentation + a controlled restart move
+0.156 meaningfully, not to hit a specific number. If it plateaus again
+around the same test mAP after this run, the next lever to pull is
+almost certainly the augmentation strength (push `background_swap_prob`
+further, or revisit whether background-swap's known limitation --
+donor object bleed-through, see `augmentation.py` docstring -- is doing
+more harm than good) rather than more epochs at the same recipe.
