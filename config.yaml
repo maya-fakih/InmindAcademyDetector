@@ -15,7 +15,7 @@ model:
   checkpoint: yolo26s.pt
 
 train:
-  epochs: 200  # was 100 -- extended for the warm restart below (see also results/yolo26n-coco-100-epochs)
+  epochs: 50  # 50-epoch first shot; grow to 100 via --resume later only if it earns it
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01
