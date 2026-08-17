@@ -1,6 +1,19 @@
 data:
   raw_dir: dataset
 
+model:
+  # yolo26s.pt, not yolo26n.pt -- this branch is named "yolo26s-coco" but the
+  # results/config it actually ran (yolo26n-coco-*) were nano the whole time.
+  # There was no `model:` section here at all; create_yolo_model()'s default
+  # ("yolo26n.pt") silently filled in. This branch exists specifically to run
+  # the real small variant. See README's Pareto rule -- yolo26s has more
+  # capacity than the 2.5M-param nano that plateaued at eval mAP@0.5 0.156,
+  # but check its reported params/GFLOPs after the first eval.py run stay
+  # under the Faster R-CNN baseline (18,950,729 params / 23.825 GFLOPs) to
+  # remain Pareto-eligible -- not hard-coded here since eval.py measures it
+  # directly.
+  checkpoint: yolo26s.pt
+
 train:
   epochs: 200  # was 100 -- extended for the warm restart below (see also results/yolo26n-coco-100-epochs)
   batch_size: 4

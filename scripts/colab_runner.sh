@@ -3,8 +3,10 @@
 # Or run from a terminal cell after `%cd InmindAcademyDetector`.
 #
 # Usage:
-#   !bash scripts/colab_runner.sh          -- fresh run (default)
-#   !bash scripts/colab_runner.sh resume   -- resume from weights/last.ckpt on Drive
+#   !bash scripts/colab_runner.sh                        -- fresh run, yolo26s-coco (default)
+#   !bash scripts/colab_runner.sh resume                 -- resume yolo26s-coco
+#   !bash scripts/colab_runner.sh fresh yolo26s-small-coco  -- fresh run on another branch
+#   !bash scripts/colab_runner.sh resume yolo26s-small-coco -- resume another branch
 #
 # A fresh run never touches an existing checkpoint's training state, but if a
 # previous run's weights/ directory exists it gets moved aside first (renamed
@@ -40,7 +42,13 @@ fi
 : "${GITHUB_TOKEN:?Set GITHUB_TOKEN to a repo-scoped GitHub token before running this script}"
 
 REPO_URL="https://${GITHUB_TOKEN}@github.com/maya-fakih/InmindAcademyDetector.git"
-BRANCH="yolo26s-coco"
+# Bug fixed here: this used to be hardcoded regardless of $2 -- harmless for
+# the "already inside a checkout" clone-skip path, but DRIVE_ROOT below reads
+# $BRANCH unconditionally, so any branch other than yolo26s-coco would read/
+# write checkpoints from *that* branch's Drive folder instead of its own
+# (silently mixing an incompatible-architecture checkpoint in, in the worst
+# case). ${2:-yolo26s-coco} keeps old one-arg invocations working unchanged.
+BRANCH="${2:-yolo26s-coco}"
 REPO_DIR="InmindAcademyDetector"
 
 # --- 1. Clone or update -----------------------------------------------------
