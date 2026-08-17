@@ -1,6 +1,7 @@
 """Train the LOCO Faster R-CNN baseline."""
 
 import argparse
+import json
 import math
 import random
 import time
@@ -123,7 +124,13 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
         start_epoch = checkpoint["epoch"] + 1
 
-    model = create_yolo_model(train_dataset.num_classes).to(device)
+    # Read the intended architecture from config instead of relying on
+    # create_yolo_model()'s default ("yolo26n.pt") -- that silent default is
+    # exactly why yolo26s-coco and yolo26s-small-coco both trained nano
+    # despite their names/config. num_classes only, not this, so this got
+    # missed once already; not again.
+    model_checkpoint = config.get("model", {}).get("checkpoint", "yolo26n.pt")
+    model = create_yolo_model(train_dataset.num_classes, checkpoint=model_checkpoint).to(device)
 
     freeze_epochs = settings.get("freeze_backbone_epochs", 0)
     freeze_layers = settings.get("freeze_backbone_layers", 0)
@@ -265,6 +272,14 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             },
             last_checkpoint_path,
         )
+
+    # Stamp which architecture these weights actually are. eval.py reads this
+    # instead of re-guessing from config.yaml -- config.yaml on Drive/another
+    # checkout can drift from what a given best.pt was actually trained with,
+    # and a silent default has already caused one round of "every branch
+    # secretly trained nano" (see yolo26s-small-coco history).
+    arch_meta = {"checkpoint": model_checkpoint, "num_classes": train_dataset.num_classes}
+    (weights_dir / "best.arch.json").write_text(json.dumps(arch_meta))
 
     print(f"[done] best weights: {weights_dir / 'best.pt'}")
 
