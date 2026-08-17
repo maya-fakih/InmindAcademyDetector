@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import json
+import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Literal, TypedDict
 
+import numpy as np
 import torch
 from einops import rearrange
 from numpy import asarray
 from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset
+
+from augmentation import (
+    random_background_swap,
+    random_color_jitter,
+    random_horizontal_flip,
+    random_scale_jitter,
+)
 
 
 class DetectionTarget(TypedDict):
@@ -50,7 +59,23 @@ ANNOTATIONS_DIRNAME = "rgb"
 class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
     """Load a LOCO split with boxes in absolute ``xyxy`` coordinates."""
 
-    def __init__(self, raw_dir: Path, split: Literal["train", "validation", "test"]) -> None:
+    def __init__(
+        self,
+        raw_dir: Path,
+        split: Literal["train", "validation", "test"],
+        background_swap_prob: float = 0.0,
+        hflip_prob: float = 0.0,
+        scale_jitter_prob: float = 0.0,
+        color_jitter_prob: float = 0.0,
+    ) -> None:
+        # Augmentation is train-only by construction: forcing these to 0 for
+        # validation/test here (rather than trusting the caller) means a
+        # misconfigured config.yaml can't silently leak augmentation into the
+        # numbers we report or select best.pt on.
+        self.background_swap_prob = background_swap_prob if split == "train" else 0.0
+        self.hflip_prob = hflip_prob if split == "train" else 0.0
+        self.scale_jitter_prob = scale_jitter_prob if split == "train" else 0.0
+        self.color_jitter_prob = color_jitter_prob if split == "train" else 0.0
         raw_dir = self._resolve_raw_dir(raw_dir, split)
         self.images: list[dict] = []
         self.image_paths: dict[int, Path] = {}
@@ -129,17 +154,11 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
     def __len__(self) -> int:
         return len(self.images)
 
-    def __getitem__(self, index: int) -> tuple[Tensor, DetectionTarget]:
+    def _load_raw(self, index: int) -> tuple[np.ndarray, np.ndarray, list[int]]:
+        """Load one image (as HWC uint8) and its boxes/labels, no augmentation applied."""
         image_info = self.images[index]
         with Image.open(self.image_paths[image_info["id"]]) as image:
             image_HWC = asarray(image.convert("RGB"), dtype="uint8").copy()
-        image_CHW = (
-            rearrange(
-                torch.from_numpy(image_HWC),
-                "height width channels -> channels height width",
-            ).float()
-            / 255
-        )
 
         boxes_NQ: list[list[float]] = []
         labels_N: list[int] = []
@@ -150,8 +169,43 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
             boxes_NQ.append([x, y, x + width, y + height])
             labels_N.append(self.category_labels[annotation["category_id"]])
 
+        boxes = np.array(boxes_NQ, dtype=np.float32).reshape(-1, 4)
+        return image_HWC, boxes, labels_N
+
+    def __getitem__(self, index: int) -> tuple[Tensor, DetectionTarget]:
+        image_HWC, boxes, labels_N = self._load_raw(index)
+
+        # Background swap needs at least one box to preserve (nothing to swap the
+        # background of, otherwise) and only makes sense with another image to
+        # borrow a background from.
+        if boxes.shape[0] > 0 and len(self) > 1 and random.random() < self.background_swap_prob:
+            donor_index = random.randrange(len(self) - 1)
+            if donor_index >= index:
+                donor_index += 1  # skip `index` without biasing toward index 0
+            donor_image_HWC, donor_boxes, _ = self._load_raw(donor_index)
+            image_HWC = random_background_swap(image_HWC, boxes, donor_image_HWC, donor_boxes)
+
+        if random.random() < self.hflip_prob:
+            image_HWC, boxes = random_horizontal_flip(image_HWC, boxes)
+
+        if boxes.shape[0] > 0 and random.random() < self.scale_jitter_prob:
+            labels_array = np.array(labels_N, dtype=np.int64)
+            image_HWC, boxes, labels_array = random_scale_jitter(image_HWC, boxes, labels_array)
+            labels_N = labels_array.tolist()
+
+        if random.random() < self.color_jitter_prob:
+            image_HWC = random_color_jitter(image_HWC)
+
+        image_CHW = (
+            rearrange(
+                torch.from_numpy(image_HWC.copy()),
+                "height width channels -> channels height width",
+            ).float()
+            / 255
+        )
+
         target: DetectionTarget = {
-            "boxes": torch.tensor(boxes_NQ, dtype=torch.float32).reshape(-1, 4),
+            "boxes": torch.from_numpy(boxes).reshape(-1, 4),
             "labels": torch.tensor(labels_N, dtype=torch.int64),
         }
         return image_CHW, target

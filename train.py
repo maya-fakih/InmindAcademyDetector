@@ -1,6 +1,7 @@
 """Train the LOCO Faster R-CNN baseline."""
 
 import argparse
+import math
 import random
 import time
 from pathlib import Path
@@ -19,6 +20,18 @@ from models.baseline import create_model
 from utils.config import load_config
 
 
+def compute_lr(
+    epoch: int, base_lr: float, warmup_epochs: int, total_epochs: int, final_fraction: float
+) -> float:
+    """Linear warmup for `warmup_epochs`, then cosine decay to `final_fraction` of base_lr."""
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return base_lr * (epoch + 1) / warmup_epochs
+    span = max(1, total_epochs - warmup_epochs)
+    progress = min((epoch - warmup_epochs) / span, 1.0)
+    cosine = 0.5 * (1 + math.cos(math.pi * progress))
+    return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
+
+
 def train(config: dict[str, Any], run: Run | None) -> None:
     """Train the detector and save the best weights."""
     settings = config["train"]
@@ -26,7 +39,22 @@ def train(config: dict[str, Any], run: Run | None) -> None:
     random.seed(settings["seed"])
 
     data = config["data"]
-    train_dataset = LocoDataset(Path(data["raw_dir"]), split="train")
+    augment = config.get("augment", {})
+    if augment.get("enabled", False):
+        train_dataset = LocoDataset(
+            Path(data["raw_dir"]),
+            split="train",
+            background_swap_prob=augment.get("background_swap_prob", 0.0),
+            hflip_prob=augment.get("hflip_prob", 0.0),
+            scale_jitter_prob=augment.get("scale_jitter_prob", 0.0),
+            color_jitter_prob=augment.get("color_jitter_prob", 0.0),
+        )
+    else:
+        train_dataset = LocoDataset(Path(data["raw_dir"]), split="train")
+    # Validation must stay clean -- it's what best.pt is selected on, so augmenting
+    # it would make "best" mean "best on artificially varied backgrounds" instead
+    # of "best on this warehouse's real val images". LocoDataset itself also
+    # forces these to 0 off the train split, this is just not passing them at all.
     val_dataset = LocoDataset(Path(data["raw_dir"]), split="validation")
     if train_dataset.category_labels != val_dataset.category_labels:
         raise ValueError("Training and validation splits define different categories")
@@ -62,6 +90,16 @@ def train(config: dict[str, Any], run: Run | None) -> None:
     best_map = -1.0
 
     for epoch in range(settings["epochs"]):
+        current_lr = compute_lr(
+            epoch,
+            settings["learning_rate"],
+            settings.get("warmup_epochs", 0),
+            settings["epochs"],
+            settings.get("lr_final_fraction", 1.0),
+        )
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
+
         epoch_start = time.perf_counter()
         model.train()
         epoch_loss = 0.0
@@ -74,8 +112,16 @@ def train(config: dict[str, Any], run: Run | None) -> None:
             losses = model(images_L, targets_L)
             loss = sum(losses.values())
 
+            if not torch.isfinite(loss):
+                # Same guard as the other branches: skip a degenerate batch instead
+                # of poisoning every weight with a backward() through a NaN/inf loss.
+                print(f"  [warn] non-finite loss ({loss.item()}) at step {step} -- skipping batch")
+                optimizer.zero_grad()
+                continue
+
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
             optimizer.step()
             epoch_loss += loss.item()
             progress.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
@@ -85,7 +131,7 @@ def train(config: dict[str, Any], run: Run | None) -> None:
         epoch_seconds = time.perf_counter() - epoch_start
         print(
             f"epoch {epoch + 1}/{settings['epochs']}  loss {epoch_loss:.4f}  "
-            f"val_mAP50 {map50:.4f}  {epoch_seconds:.0f}s"
+            f"val_mAP50 {map50:.4f}  lr {current_lr:.6f}  {epoch_seconds:.0f}s"
         )
         if run is not None:
             run.log(
