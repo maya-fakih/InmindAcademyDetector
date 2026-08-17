@@ -21,15 +21,35 @@ from utils.config import load_config
 
 
 def compute_lr(
-    epoch: int, base_lr: float, warmup_epochs: int, total_epochs: int, final_fraction: float
+    epoch: int,
+    base_lr: float,
+    warmup_epochs: int,
+    total_epochs: int,
+    final_fraction: float,
+    schedule_start_epoch: int = 0,
+    peak_lr_fraction: float = 1.0,
 ) -> float:
-    """Linear warmup for `warmup_epochs`, then cosine decay to `final_fraction` of base_lr."""
-    if warmup_epochs > 0 and epoch < warmup_epochs:
-        return base_lr * (epoch + 1) / warmup_epochs
-    span = max(1, total_epochs - warmup_epochs)
-    progress = min((epoch - warmup_epochs) / span, 1.0)
+    """Linear warmup for `warmup_epochs`, then cosine decay to `final_fraction` of base_lr.
+
+    ``schedule_start_epoch``/``peak_lr_fraction`` support an SGDR-style warm
+    restart when resuming into an *extended* schedule (settings["epochs"]
+    raised past what the checkpoint was originally trained for): instead of
+    naively resuming into the old absolute cosine curve -- which, this deep
+    into decay, would jump LR from near-zero straight to ~50% of base_lr in a
+    single step -- warmup/decay are computed relative to the restart point,
+    ramping over `warmup_epochs` up to only `peak_lr_fraction * base_lr`
+    rather than the abrupt full jump. Left at their defaults (0, 1.0), this
+    is identical to the original schedule.
+    """
+    relative_epoch = epoch - schedule_start_epoch
+    relative_total = total_epochs - schedule_start_epoch
+    peak_lr = base_lr * peak_lr_fraction
+    if warmup_epochs > 0 and relative_epoch < warmup_epochs:
+        return peak_lr * (relative_epoch + 1) / warmup_epochs
+    span = max(1, relative_total - warmup_epochs)
+    progress = min((relative_epoch - warmup_epochs) / span, 1.0)
     cosine = 0.5 * (1 + math.cos(math.pi * progress))
-    return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
+    return peak_lr * final_fraction + (peak_lr - peak_lr * final_fraction) * cosine
 
 
 def split_backbone_head_params(model: torch.nn.Module, num_layers: int):
@@ -180,12 +200,39 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         )
 
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    optimizer = SGD(
-        params,
-        lr=settings["learning_rate"],
-        momentum=settings["momentum"],
-        weight_decay=settings["weight_decay"],
+    # Bug fixed here: resuming past the point where the in-loop unfreeze block
+    # (below) already ran in a *previous* run used to always rebuild a flat,
+    # single-group optimizer -- silently dropping the discriminative backbone
+    # LR (backbone_lr_mult) that block exists specifically to apply. That's
+    # the exact fix that stopped the ~1e25/1e26 loss explosion in the first
+    # place; losing it on resume reopens the same risk the moment training
+    # continues. It also meant `optimizer.load_state_dict` below was loading
+    # a checkpoint saved with 2 param groups into a freshly-built 1-group
+    # optimizer -- a shape mismatch, silently swallowed by the except clause,
+    # so momentum was being thrown away on every resume past the unfreeze
+    # point even before this fix.
+    already_unfrozen_on_resume = (
+        freeze_layers > 0 and freeze_epochs > 0 and start_epoch >= freeze_epochs
     )
+    if already_unfrozen_on_resume:
+        backbone_params, head_params = split_backbone_head_params(model, freeze_layers)
+        backbone_lr_mult = settings.get("backbone_lr_multiplier", 0.1)
+        optimizer = SGD(
+            [
+                {"params": backbone_params, "lr_mult": backbone_lr_mult},
+                {"params": head_params, "lr_mult": 1.0},
+            ],
+            lr=settings["learning_rate"],
+            momentum=settings["momentum"],
+            weight_decay=settings["weight_decay"],
+        )
+    else:
+        optimizer = SGD(
+            params,
+            lr=settings["learning_rate"],
+            momentum=settings["momentum"],
+            weight_decay=settings["weight_decay"],
+        )
     best_map = -1.0
 
     if checkpoint is not None:
@@ -202,7 +249,41 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             f"[resume] continuing from {resume_from}.ckpt, epoch {start_epoch + 1}, "
             f"best_map so far {best_map:.4f}"
         )
+        if already_unfrozen_on_resume:
+            print(
+                "[resume] backbone was already unfrozen in the run this checkpoint "
+                f"came from -- rebuilt the discriminative-LR optimizer "
+                f"(backbone_lr_mult={settings.get('backbone_lr_multiplier', 0.1)}) "
+                "instead of a flat one."
+            )
 
+    # Warm restart (opt-in): only kicks in when resuming AND config.yaml sets
+    # restart_peak_lr_fraction -- i.e. you've raised train.epochs past what this
+    # checkpoint already finished and want a deliberate SGDR-style LR bump to
+    # try to escape wherever the cosine decay had it converging, rather than
+    # silently resuming into the tail of the *old* absolute schedule (which
+    # would jump LR from near-zero to ~50% of base_lr in one step). See
+    # compute_lr's docstring. No effect on a plain interrupted-run resume.
+    schedule_start_epoch = 0
+    peak_lr_fraction = 1.0
+    warmup_epochs = settings.get("warmup_epochs", 0)
+    restart_peak_lr_fraction = settings.get("restart_peak_lr_fraction")
+    if checkpoint is not None and restart_peak_lr_fraction is not None:
+        schedule_start_epoch = start_epoch
+        peak_lr_fraction = restart_peak_lr_fraction
+        warmup_epochs = settings.get("restart_warmup_epochs", warmup_epochs)
+        print(
+            f"[restart] warm-restarting LR at epoch {start_epoch + 1}: ramping to "
+            f"{peak_lr_fraction * settings['learning_rate']:.6f} over {warmup_epochs} "
+            f"epochs, then cosine-decaying to epoch {settings['epochs']}"
+        )
+
+    # already_unfrozen_on_resume means the discriminative-LR optimizer above was
+    # already (re)built with the correct groups, so the in-loop unfreeze block
+    # below correctly won't fire again (backbone_frozen is False). unfreeze_epoch
+    # stays None on that path on purpose -- the post-unfreeze re-warmup ramp
+    # already happened in the earlier run; re-applying it here would just delay
+    # the (separately warm-restarted) LR schedule for no reason.
     unfreeze_epoch = None
     for epoch in range(start_epoch, settings["epochs"]):
         if freeze_layers > 0 and backbone_frozen and epoch >= freeze_epochs:
@@ -232,9 +313,11 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         current_lr = compute_lr(
             epoch,
             settings["learning_rate"],
-            settings.get("warmup_epochs", 0),
+            warmup_epochs,
             settings["epochs"],
             settings.get("lr_final_fraction", 1.0),
+            schedule_start_epoch=schedule_start_epoch,
+            peak_lr_fraction=peak_lr_fraction,
         )
         if unfreeze_epoch is not None:
             # Millions of previously-frozen backbone params suddenly get gradients

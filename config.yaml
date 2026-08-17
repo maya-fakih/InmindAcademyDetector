@@ -8,7 +8,10 @@ model:
   checkpoint: weights/yolov4-tiny.conv.29
 
 train:
-  epochs: 50
+  # was 50 -- a completed 50-epoch checkpoint resuming into epochs: 50 loops
+  # zero times (range(50, 50) is empty). Bumped to 100 so `--resume last`
+  # actually continues for 50 more epochs.
+  epochs: 100
   test_eval_every: 25  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
   batch_size: 16
   learning_rate: 0.01  # scaled with batch_size (linear scaling rule), still conservative
@@ -16,6 +19,15 @@ train:
   warmup_epochs: 3
   freeze_backbone_epochs: 5
   freeze_backbone_layers: 11
+  backbone_lr_multiplier: 0.1  # backbone gets 10% of head LR once unfrozen -- see train.py
+  # SGDR-style warm restart on resume, same mechanism as the yolo26s-coco
+  # branch: without this, resuming this checkpoint into the extended
+  # 100-epoch schedule would jump LR from ~4.5% of base (where the old
+  # 50-epoch cosine decay left off) to ~53% of base in a single step -- the
+  # same class of instability that caused the ~1e25/1e26 explosion this
+  # branch already had to fix once for the backbone-unfreeze transition.
+  restart_peak_lr_fraction: 0.3
+  restart_warmup_epochs: 5
   momentum: 0.9
   weight_decay: 0.0005
   num_workers: 0  # worker subprocesses kept getting OOM-killed on Colab free-tier RAM (hit during both training and validation) -- 0 avoids the extra subprocess memory entirely
