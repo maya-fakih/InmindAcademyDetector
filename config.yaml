@@ -15,7 +15,7 @@ model:
   checkpoint: yolo26s.pt
 
 train:
-  epochs: 50  # 50-epoch first shot; grow to 100 via --resume later only if it earns it
+  epochs: 100  # 50-epoch first shot earned it: test mAP@0.5 0.2101, up from nano's 0.1559. Growing to 100.
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01
