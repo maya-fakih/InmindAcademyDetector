@@ -34,7 +34,14 @@ train:
   # was 0 -- serialized data loading was a known bottleneck (see Handoff.md
   # "Known infra fix needed") that never got fixed. 2 matches Colab's typical
   # free-tier 2-vCPU allocation; raise if a bigger runtime is available.
-  num_workers: 2
+  # 0, not 2 -- yolo26s (9.5M params) plus 2 worker processes plus
+  # background_swap's extra image loads OOM-killed on Colab free-tier RAM
+  # (RuntimeError: DataLoader worker killed by signal: Killed, epoch 2/50).
+  # This is Colab resource pressure, not a code bug -- nano at num_workers=2
+  # never hit this. Costs data-loading throughput (serialized again), but
+  # that's the direct tradeoff for not OOMing with the bigger model here.
+  # Raise back to 2 if you get a bigger-RAM Colab runtime.
+  num_workers: 0
   seed: 0
 
 augment:
