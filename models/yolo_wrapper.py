@@ -108,7 +108,17 @@ class Yolov4TinyWrapper(nn.Module):
             self.model.load_weights(weights_path)
             print(f"[backbone] loaded pretrained weights from {weights_path} ({size_bytes:,} bytes)")
         else:
-            print("[backbone] no weights_path given -- yolov4-tiny initialized RANDOMLY")
+            # Expected/harmless in eval.py and predict.py: they intentionally skip
+            # backbone-only pretrain loading here since a full trained checkpoint's
+            # state_dict is loaded right after construction, overwriting these
+            # random values entirely -- see the comment in eval.py. Only a real
+            # problem if you're seeing this during train.py on a *fresh* run with
+            # model.checkpoint set in config.yaml (means that path didn't resolve).
+            print(
+                "[backbone] no pretrained backbone weights given -- yolov4-tiny "
+                "constructed with random weights (fine if a trained checkpoint is "
+                "about to be loaded on top, e.g. in eval.py/predict.py)"
+            )
         self.image_size = self.model.width
         assert self.model.width == self.model.height, "only square net inputs are supported"
 

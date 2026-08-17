@@ -86,6 +86,20 @@ mkdir -p "$DATA_DIR" "$RUNS_DIR"
 echo "[setup] checking LOCO dataset..."
 bash scripts/download_loco.sh "$DATA_DIR"
 
+# --- 3b. Re-cluster yolov4-tiny anchors on LOCO (fresh runs only) -----------
+# This was a documented prerequisite (see Handoff.md) that never actually got
+# run -- the cfg still had stock COCO anchors through the entire 50-epoch run
+# that only reached ~0.05 test mAP@0.5. Auto-running it here on every fresh
+# run removes the "forgot the prerequisite" failure mode entirely. Skipped on
+# resume deliberately: swapping anchor shapes out from under an
+# already-training checkpoint would invalidate what its head learned to
+# predict relative to the old anchors, which is its own kind of instability.
+# Guarded on the cfg file existing so this is a no-op for other branches ($2).
+if [[ "$MODE" == "fresh" && -f "vendor/pytorch_yolov4/yolov4-tiny.cfg" ]]; then
+    echo "[setup] re-clustering yolov4-tiny anchors on LOCO (subsets 2/3/5 only)..."
+    uv run python scripts/cluster_anchors.py --raw-dir "$DATA_DIR" --write
+fi
+
 python3 -c "
 import yaml
 with open('config.yaml') as f:
