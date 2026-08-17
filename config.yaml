@@ -1,6 +1,14 @@
 data:
   raw_dir: dataset
 
+model:
+  # Despite this branch's name, it has always trained nano, not small --
+  # create_yolo_model()'s silent default filled this in before train.py read
+  # model.checkpoint. Making that explicit now instead of quietly leaving it
+  # implicit again. yolo26s-small-coco is the branch that actually uses
+  # yolo26s.pt.
+  checkpoint: yolo26n.pt
+
 train:
   epochs: 200  # was 100 -- extended for the warm restart below (see also results/yolo26n-coco-100-epochs)
   batch_size: 4
