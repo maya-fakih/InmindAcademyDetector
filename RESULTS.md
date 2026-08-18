@@ -7,5 +7,6 @@ This is just the running scoreboard.
 |---|---|---|---|---|---|---|
 | yolo26n-coco-50-epochs | yolo26s-coco | 0.112 | 0.305 (epoch 33/50) | 2.51 M | 5.75 | COCO-pretrained, no head transfer, no leak check yet |
 | yolo26n-coco-100-epochs | yolo26s-coco | 0.156 | 0.349 (best.ckpt tracking) | 2.51 M | 5.75 | Large val (subsets 2/3/5 held-out)/test (subsets 1/4) gap identified -- warehouse-shortcut overfitting, not a bug (see Handoff.md). Augmentation + warm-restart fix in progress. |
+| yolo26s-small-coco-50-epochs | yolo26s-small-coco | 0.210 | 0.409 (epoch 50/50) | 9.95 M | 22.45 | Real improvement over nano from larger architecture; not yet at target. Extending to 100 epochs. |
 
 Target: 0.70 mAP@0.5.

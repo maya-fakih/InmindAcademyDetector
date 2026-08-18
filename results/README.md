@@ -23,5 +23,6 @@ under the hood -- doesn't reimplement or modify them.
 
 | run | branch | mAP@0.5 | notes |
 |---|---|---|---|
+| yolo26n-coco-50-epochs | yolo26s-coco | 0.1120 | nano, 50 epochs, baseline |
 | yolo26n-coco-100-epochs | yolo26s-coco | 0.1559 | nano, 100 epochs |
 | yolo26s-small-coco-50-epochs | yolo26s-small-coco | 0.2101 | yolo26s, 50 epochs, extending to 100 |
