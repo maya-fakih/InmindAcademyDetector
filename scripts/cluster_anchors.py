@@ -21,9 +21,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
+
+# Running this as `python scripts/cluster_anchors.py` (as colab_runner.sh
+# does) puts scripts/ -- not the repo root -- at the front of sys.path, so
+# the top-level `dataset` module isn't importable without this.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dataset import ANNOTATIONS_DIRNAME, DEVELOPMENT_FILES
 
