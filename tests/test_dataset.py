@@ -6,7 +6,7 @@ import pytest
 import torch
 from PIL import Image
 
-from dataset import LocoDataset, compute_balanced_split
+from dataset import LocoDataset
 
 
 def write_subset(
@@ -66,9 +66,7 @@ def make_dataset(
 
 
 def find_item(dataset: LocoDataset, *, has_annotations: bool):
-    """Return the first (image, target) pair matching ``has_annotations``, regardless
-    of which split index it lands at (the balanced split can reorder which image is
-    where, so tests must not assume a fixed position)."""
+    """Return the first (image, target) pair matching ``has_annotations``."""
     for index in range(len(dataset)):
         image_CHW, target = dataset[index]
         if (target["boxes"].shape[0] > 0) == has_annotations:
@@ -97,25 +95,30 @@ def test_empty_annotations_have_detection_shapes(tmp_path: Path) -> None:
     assert target["labels"].shape == (0,)
 
 
-def test_validation_holdout_is_deterministic_and_disjoint(tmp_path: Path) -> None:
+def test_train_split_uses_only_subsets_two_three_five(tmp_path: Path) -> None:
     train_dataset = make_dataset(tmp_path, split="train")
+
+    # 4 images total across sub2 (3) + sub3 (1) + sub5 (0); all go to train on
+    # this branch since there's no held-out slice cut from 2/3/5 anymore.
+    assert len(train_dataset) == 4
+    for path in train_dataset.image_paths.values():
+        assert "subset-2" in path.parts or "subset-3" in path.parts or "subset-5" in path.parts
+
+
+def test_validation_split_uses_only_subset_four(tmp_path: Path) -> None:
     validation_dataset = make_dataset(tmp_path, split="validation")
 
-    # 4 development images total (3 in sub2, 1 in sub3, 0 in sub5).
-    assert len(train_dataset) + len(validation_dataset) == 4
-    assert set(validation_dataset.image_paths.values()).isdisjoint(
-        train_dataset.image_paths.values()
-    )
-
-    # Rebuilding from scratch must reproduce the exact same split (same seed).
-    train_again = make_dataset(tmp_path, split="train")
-    assert set(train_dataset.image_paths.values()) == set(train_again.image_paths.values())
+    assert len(validation_dataset) == 1
+    for path in validation_dataset.image_paths.values():
+        assert "subset-4" in path.parts
 
 
-def test_test_split_uses_subsets_one_and_four(tmp_path: Path) -> None:
+def test_test_split_uses_only_subset_one(tmp_path: Path) -> None:
     dataset = make_dataset(tmp_path, split="test")
 
-    assert len(dataset) == 2
+    assert len(dataset) == 1
+    for path in dataset.image_paths.values():
+        assert "subset-1" in path.parts
 
 
 def test_resolves_when_pointed_at_annotations_dir(tmp_path: Path) -> None:
@@ -134,39 +137,3 @@ def test_image_paths_do_not_depend_on_working_directory(
     image_CHW, _ = dataset[0]
 
     assert image_CHW.dtype == torch.float32
-
-
-def test_balanced_split_covers_every_image_exactly_once() -> None:
-    images = [{"id": i} for i in range(1, 11)]
-    annotations = [{"image_id": i, "category_id": 1} for i in range(1, 11)]
-
-    assignment = compute_balanced_split(images, annotations, val_fraction=0.3, seed=0)
-
-    assert set(assignment.keys()) == {image["id"] for image in images}
-    assert set(assignment.values()) <= {"train", "validation"}
-
-
-def test_balanced_split_is_deterministic_for_the_same_seed() -> None:
-    images = [{"id": i} for i in range(1, 11)]
-    annotations = [{"image_id": i, "category_id": 1} for i in range(1, 11)]
-
-    first = compute_balanced_split(images, annotations, val_fraction=0.3, seed=0)
-    second = compute_balanced_split(images, annotations, val_fraction=0.3, seed=0)
-
-    assert first == second
-
-
-def test_balanced_split_does_not_starve_validation_on_ties() -> None:
-    """Regression test: images with identical class content produce exact MSE ties
-    between buckets. An earlier version of this function broke ties by always
-    preferring 'train' (the first candidate), which silently starved validation
-    even when it had room. Ties must instead favor whichever bucket is furthest
-    behind its target size.
-    """
-    images = [{"id": i} for i in range(1, 11)]
-    annotations = [{"image_id": i, "category_id": 1} for i in range(1, 11)]
-
-    assignment = compute_balanced_split(images, annotations, val_fraction=0.4, seed=0)
-
-    validation_count = sum(1 for bucket in assignment.values() if bucket == "validation")
-    assert validation_count == 4

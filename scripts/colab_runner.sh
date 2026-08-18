@@ -3,8 +3,8 @@
 # Or run from a terminal cell after `%cd InmindAcademyDetector`.
 #
 # Usage:
-#   !bash scripts/colab_runner.sh                        -- fresh run, yolo26s-coco (default)
-#   !bash scripts/colab_runner.sh resume                 -- resume yolo26s-coco
+#   !bash scripts/colab_runner.sh                        -- fresh run, yolo26s-altsplit (default)
+#   !bash scripts/colab_runner.sh resume                 -- resume yolo26s-altsplit
 #   !bash scripts/colab_runner.sh fresh <other-branch>   -- fresh run on another branch
 #   !bash scripts/colab_runner.sh resume <other-branch>  -- resume another branch
 #
@@ -21,7 +21,7 @@
 #      MyDrive/InmindAcademyDetector-${BRANCH}/, not the ephemeral VM disk.
 #   4. Train for config.yaml's epoch count -- resuming only if "resume" was
 #      passed as the first argument and weights/last.ckpt exists on Drive.
-#   5. Evaluate the best checkpoint on subsets 1/4 once training finishes.
+#   5. Evaluate the best checkpoint on subset 1 (this branch's only blind test set) once training finishes.
 #
 # Everything is logged to train.log / eval.log so you can check progress or
 # read the full output in the morning even if the cell itself scrolled away.
@@ -44,11 +44,10 @@ fi
 REPO_URL="https://${GITHUB_TOKEN}@github.com/maya-fakih/InmindAcademyDetector.git"
 # Bug fixed here: this used to be hardcoded regardless of $2 -- harmless for
 # the "already inside a checkout" clone-skip path, but DRIVE_ROOT below reads
-# $BRANCH unconditionally, so any branch other than yolo26s-coco (e.g.
-# yolo26s-small-coco) would read/write checkpoints from *this* branch's Drive
-# folder instead of its own. ${2:-yolo26s-coco} keeps old one-arg invocations
-# working unchanged.
-BRANCH="${2:-yolo26s-coco}"
+# $BRANCH unconditionally, so any branch other than the default would read/
+# write checkpoints from *this* branch's Drive folder instead of its own.
+# ${2:-yolo26s-altsplit} keeps one-arg invocations working unchanged.
+BRANCH="${2:-yolo26s-altsplit}"
 REPO_DIR="InmindAcademyDetector"
 
 # --- 1. Clone or update -----------------------------------------------------
@@ -128,7 +127,7 @@ export MPLBACKEND=Agg  # Colab exports MPLBACKEND=matplotlib_inline's backend gl
 uv run train.py --config colab_config.yaml $RESUME_FLAG 2>&1 | tee train.log
 
 # --- 5. Evaluate the best checkpoint -----------------------------------------
-echo "[eval] evaluating ${RUNS_DIR}/weights/best.pt on subsets 1/4..."
+echo "[eval] evaluating ${RUNS_DIR}/weights/best.pt on subset 1 (blind test set for this split)..."
 uv run eval.py --config colab_config.yaml --weights "${RUNS_DIR}/weights/best.pt" 2>&1 | tee eval.log
 
 echo "[done] training + eval finished. See train.log and eval.log for full output."

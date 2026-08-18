@@ -2,34 +2,27 @@ data:
   raw_dir: dataset
 
 model:
-  # Despite this branch's name, it has always trained nano, not small --
-  # create_yolo_model()'s silent default filled this in before train.py read
-  # model.checkpoint. Making that explicit now instead of quietly leaving it
-  # implicit again. yolo26s-small-coco is the branch that actually uses
-  # yolo26s.pt.
-  checkpoint: yolo26n.pt
+  # yolo26s (small), per the ask for this branch -- not yolo26n. Matches
+  # yolo26s-small-coco's choice, just on the alternate 2/3/5-train/4-val/1-test
+  # split (see dataset.py's SUBSET_FILES comment) instead of the default split.
+  checkpoint: yolo26s.pt
 
 train:
-  epochs: 200  # was 100 -- extended for the warm restart below (see also results/yolo26n-coco-100-epochs)
+  epochs: 100  # fresh run on a new split -- no prior checkpoint to extend from
   batch_size: 4
   learning_rate: 0.005
   lr_final_fraction: 0.01
   warmup_epochs: 3
-  # SGDR-style warm restart on resume: --resume last past epoch 100 ramps LR back
-  # up to 30% of base_lr over 5 epochs (not the full base_lr -- the model already
-  # converged somewhat, a full jump risks the loss-explosion instability seen on
-  # yolov4t-loco when unfrozen params met a too-high LR) then cosine-decays to
-  # epoch 200. No effect on a fresh run or a plain same-target-epoch resume.
-  restart_peak_lr_fraction: 0.3
-  restart_warmup_epochs: 5
   freeze_backbone_epochs: 5
   freeze_backbone_layers: 11
   momentum: 0.9
   weight_decay: 0.0005
-  # was 0 -- serialized data loading was a known bottleneck (see Handoff.md
-  # "Known infra fix needed") that never got fixed. 2 matches Colab's typical
-  # free-tier 2-vCPU allocation; raise if a bigger runtime is available.
-  num_workers: 2
+  # 0, not 2 -- yolo26s (9.5M params) OOM'd on Colab free-tier RAM at
+  # num_workers=2 during the yolo26s-small-coco run (DataLoader worker killed
+  # by signal: Killed, epoch 2/50). Same model size here, so starting from
+  # that known-good value instead of re-discovering it. Raise if run on a
+  # bigger-RAM Colab runtime.
+  num_workers: 0
   seed: 0
 
 augment:
