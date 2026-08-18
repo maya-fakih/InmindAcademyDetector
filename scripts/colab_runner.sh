@@ -8,11 +8,9 @@
 #   !bash scripts/colab_runner.sh fresh <other-branch>           -- fresh run on another branch
 #   !bash scripts/colab_runner.sh resume <other-branch>          -- resume another branch
 #
-# This branch's train.py has no --resume flag (the plain baseline never had
-# one, and this branch didn't add one), so "resume" here is best-effort: it
-# just checks weights/last.ckpt doesn't exist and warns rather than silently
-# starting fresh over it. Add real --resume support to train.py before
-# relying on interrupting/continuing a run.
+# train.py now saves weights/last.ckpt and weights/best.ckpt (epoch + optimizer
+# state, same pattern as yolo26s-coco/yolov4t-loco), so "resume" actually
+# continues training rather than just checking nothing's in the way.
 #
 # What it does, in order:
 #   1. Clone/pull the repo (idempotent -- safe to rerun after a disconnect).
@@ -91,18 +89,15 @@ with open('colab_config.yaml', 'w') as f:
     yaml.safe_dump(config, f, sort_keys=False)
 "
 
-# --- 4. Train -----------------------------------------------------------------
+# --- 4. Train (resume only if explicitly requested) --------------------------
+RESUME_FLAG=""
 if [[ "$MODE" == "resume" ]]; then
-    echo "[warn] this branch's train.py has no --resume flag -- 'resume' here is" >&2
-    echo "       currently a no-op beyond the check below. Add --resume support" >&2
-    echo "       to train.py (see yolo26s-coco/yolov4t-loco for the pattern)" >&2
-    echo "       before relying on it." >&2
-    if [[ -f "${RUNS_DIR}/weights/best.pt" ]]; then
-        echo "[error] weights/best.pt already exists at ${RUNS_DIR} and this script" >&2
-        echo "        can't resume into it -- move it aside yourself if you want a" >&2
-        echo "        fresh run, or add real resume support to train.py first." >&2
+    if [[ ! -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
+        echo "[error] resume requested but no ${RUNS_DIR}/weights/last.ckpt found" >&2
         exit 1
     fi
+    echo "[train] resume requested — continuing from last.ckpt"
+    RESUME_FLAG="--resume last"
 elif [[ -d "${RUNS_DIR}/weights" ]]; then
     BACKUP_DIR="${RUNS_DIR}/weights-backup-$(date +%Y%m%d-%H%M%S)"
     echo "[train] fresh run requested but weights/ already exists — moving it to"
@@ -115,7 +110,7 @@ export MPLBACKEND=Agg  # Colab exports MPLBACKEND=matplotlib_inline's backend gl
                         # that package isn't in this project's uv venv -- matplotlib (pulled
                         # in by torchmetrics) then fails to import. Nothing here needs
                         # interactive plots, so force a headless backend instead.
-uv run train.py --config colab_config.yaml 2>&1 | tee train.log
+uv run train.py --config colab_config.yaml $RESUME_FLAG 2>&1 | tee train.log
 
 # --- 5. Evaluate the best checkpoint -----------------------------------------
 echo "[eval] evaluating ${RUNS_DIR}/weights/best.pt on subsets 1/4..."

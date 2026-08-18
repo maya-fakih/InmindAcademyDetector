@@ -32,7 +32,7 @@ def compute_lr(
     return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
 
 
-def train(config: dict[str, Any], run: Run | None) -> None:
+def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
     """Train the detector and save the best weights."""
     settings = config["train"]
     torch.manual_seed(settings["seed"])
@@ -77,6 +77,22 @@ def train(config: dict[str, Any], run: Run | None) -> None:
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    weights_dir = Path(config["output_dir"]) / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    last_checkpoint_path = weights_dir / "last.ckpt"
+    best_checkpoint_path = weights_dir / "best.ckpt"
+
+    # Peek the checkpoint's epoch (if resuming) the same way yolo26s-coco/yolov4t-loco
+    # do, so a Colab disconnect mid-run can actually be continued instead of losing
+    # everything but best.pt's weights. See those branches for why this dict form
+    # (not the old weights-only best.pt) is what makes real resume possible.
+    resume_path = {"last": last_checkpoint_path, "best": best_checkpoint_path}.get(resume_from)
+    checkpoint = None
+    start_epoch = 0
+    if resume_path is not None and resume_path.is_file():
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
+        start_epoch = checkpoint["epoch"] + 1
+
     model = create_model(train_dataset.num_classes).to(device)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
@@ -85,11 +101,24 @@ def train(config: dict[str, Any], run: Run | None) -> None:
         momentum=settings["momentum"],
         weight_decay=settings["weight_decay"],
     )
-    weights_dir = Path(config["output_dir"]) / "weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
     best_map = -1.0
 
-    for epoch in range(settings["epochs"]):
+    if checkpoint is not None:
+        model.load_state_dict(checkpoint["model_state"])
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+        except (ValueError, RuntimeError) as error:
+            print(
+                f"[resume] optimizer state didn't match new param groups, "
+                f"starting fresh momentum: {error}"
+            )
+        best_map = checkpoint["best_map"]
+        print(
+            f"[resume] continuing from {resume_from}.ckpt, epoch {start_epoch + 1}, "
+            f"best_map so far {best_map:.4f}"
+        )
+
+    for epoch in range(start_epoch, settings["epochs"]):
         current_lr = compute_lr(
             epoch,
             settings["learning_rate"],
@@ -145,7 +174,26 @@ def train(config: dict[str, Any], run: Run | None) -> None:
         if map50 > best_map:
             best_map = map50
             torch.save(model.state_dict(), weights_dir / "best.pt")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "best_map": best_map,
+                },
+                best_checkpoint_path,
+            )
             print(f"  saved new best: {best_map:.4f}")
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state": model.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "best_map": best_map,
+            },
+            last_checkpoint_path,
+        )
 
     print(f"[done] best weights: {weights_dir / 'best.pt'}")
 
@@ -153,12 +201,18 @@ def train(config: dict[str, Any], run: Run | None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument(
+        "--resume",
+        choices=["last", "best"],
+        default=None,
+        help="continue from weights/last.ckpt or weights/best.ckpt if present",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
     wandb_config = config["wandb"]
 
     if not wandb_config["enabled"]:
-        train(config, run=None)
+        train(config, run=None, resume_from=args.resume)
         return
 
     with wandb.init(
@@ -166,7 +220,7 @@ def main() -> None:
         entity=wandb_config["entity"],
         config=config,
     ) as run:
-        train(config, run)
+        train(config, run, resume_from=args.resume)
 
 
 if __name__ == "__main__":
