@@ -47,7 +47,7 @@ def coarse_signature(image: Image.Image) -> list[float]:
 
 
 def histogram_distance(a: list[float], b: list[float]) -> float:
-    return sum(abs(x - y) for x, y in zip(a, b))
+    return sum(abs(x - y) for x, y in zip(a, b, strict=True))
 
 
 def find_matches(
@@ -104,7 +104,9 @@ def find_matches(
                     "rot270": image.rotate(270, expand=True),
                     "hflip": image.transpose(Image.FLIP_LEFT_RIGHT),
                 }
-                variant_hashes = {name: imagehash.phash(variant) for name, variant in variants.items()}
+                variant_hashes = {
+                    name: imagehash.phash(variant) for name, variant in variants.items()
+                }
         except OSError as error:
             print(f"[skip] could not re-check {candidate_path}: {error}")
             continue
@@ -176,7 +178,9 @@ def main() -> None:
             print(f"[skip] could not read {path}: {error}")
     print(f"  {len(candidate_hashes)} candidate images hashed")
 
-    matches = find_matches(holdout_hashes, candidate_hashes, holdout_signatures, candidate_signatures, args.threshold)
+    matches = find_matches(
+        holdout_hashes, candidate_hashes, holdout_signatures, candidate_signatures, args.threshold
+    )
 
     if not matches:
         print("No matches found within threshold.")

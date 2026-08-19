@@ -59,9 +59,11 @@ def main() -> None:
     print(f"Target classes ({len(target_names)}): {target_names}")
 
     if source_names == target_names:
-        print("Class lists are identical (same names, same order) -- no head "
-              "surgery needed. Copying checkpoint through unchanged; resume "
-              "training on it directly.")
+        print(
+            "Class lists are identical (same names, same order) -- no head "
+            "surgery needed. Copying checkpoint through unchanged; resume "
+            "training on it directly."
+        )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_bytes(args.source_checkpoint.read_bytes())
         print(f"Wrote {args.output}")
@@ -76,11 +78,12 @@ def main() -> None:
     # Flag which tensors this will touch, per the ASSUMPTION FLAGGED comment
     # in class_weight_transfer.py -- print for a human to eyeball before
     # trusting this on a real run.
-    print("Candidate source tensors (verify these are classification-head, "
-          f"not box-regression, before trusting the transfer): "
-          f"{list_candidate_tensors(pretrained, len(source_names))}")
-    print(f"Candidate target tensors: "
-          f"{list_candidate_tensors(target_model, len(target_names))}")
+    print(
+        "Candidate source tensors (verify these are classification-head, "
+        f"not box-regression, before trusting the transfer): "
+        f"{list_candidate_tensors(pretrained, len(source_names))}"
+    )
+    print(f"Candidate target tensors: {list_candidate_tensors(target_model, len(target_names))}")
 
     transferred = transfer_matched_class_rows(
         pretrained_model=pretrained,
