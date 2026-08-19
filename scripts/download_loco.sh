@@ -13,20 +13,47 @@ annotations=(
     loco-sub5-v1-train.json
 )
 
-ready=true
-for annotation in "${annotations[@]}"; do
-    if [[ ! -f "$output_dir/rgb/$annotation" ]]; then
-        ready=false
-        break
-    fi
-done
-# Images sit at varying depths: subset-1 holds them directly, the others nest them several
-# directories down, so the search cannot be depth-limited.
-image_file="$(find "$output_dir" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) -print -quit 2>/dev/null || true)"
-if [[ "$ready" == true && -n "$image_file" ]]; then
+# Checks every image path referenced by the downloaded annotation files actually exists on
+# disk (not just that annotation files are present, and not just that *some* image exists).
+# Google Drive's FUSE mount can silently drop or truncate individual files out of a few
+# thousand written in one go, so "some images exist" is not the same as "all images exist".
+check_images_complete() {
+    python3 - "$output_dir" "${annotations[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+archive_root = "/dataset"
+missing: list[str] = []
+checked = 0
+
+for name in sys.argv[2:]:
+    if name == "loco-all-v1.json":
+        continue  # superset of the per-subset files below; skip to avoid double-checking
+    path = output_dir / "rgb" / name
+    if not path.is_file():
+        sys.exit(1)  # annotation file itself missing -> definitely not ready
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for image in data["images"]:
+        rel = Path(image["path"]).relative_to(archive_root)
+        checked += 1
+        if not (output_dir / rel).is_file():
+            missing.append(str(rel))
+
+print(f"checked {checked} images, {len(missing)} missing", file=sys.stderr)
+if missing:
+    sample = "\n".join(missing[:20])
+    print(f"missing (showing up to 20 of {len(missing)}):\n{sample}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+if check_images_complete; then
     printf 'LOCO is already available at %s\n' "$output_dir"
     exit 0
 fi
+printf 'LOCO at %s is missing or incomplete; (re)downloading...\n' "$output_dir"
 
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
@@ -81,6 +108,14 @@ for annotation in "${annotations[@]}"; do
         exit 1
     fi
 done
+
+if ! check_images_complete; then
+    printf 'LOCO download finished but some referenced images are still missing from %s ' "$output_dir" >&2
+    printf '(see missing list above). This points to a gap in the upstream archive rather than a ' >&2
+    printf 'Drive copy glitch, since we just re-extracted it fresh. Consider setting ' >&2
+    printf 'LOCO_DOWNLOAD_URL to an alternate mirror.\n' >&2
+    exit 1
+fi
 
 image_count="$(find "$output_dir" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \) | wc -l)"
 printf 'LOCO is ready at %s (%d images, %d annotation files)\n' "$output_dir" "$image_count" "${#annotations[@]}"

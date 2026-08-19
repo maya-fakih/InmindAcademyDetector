@@ -148,6 +148,17 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
                     continue
                 self.annotations[image_id].append({**annotation, "image_id": image_id})
 
+        missing = [path for path in self.image_paths.values() if not path.is_file()]
+        if missing:
+            sample = "\n".join(str(path) for path in missing[:10])
+            raise FileNotFoundError(
+                f"{len(missing)} of {len(self.image_paths)} images for split={split!r} are "
+                f"missing on disk (showing up to 10):\n{sample}\n"
+                "Re-run scripts/download_loco.sh -- it now verifies every referenced image is "
+                "present, not just that the annotation files downloaded, and will "
+                "re-download/re-extract if anything is missing."
+            )
+
         if categories is None:
             raise ValueError(f"No LOCO annotations found for {split}")
         categories = sorted(categories, key=lambda category: category["id"])
