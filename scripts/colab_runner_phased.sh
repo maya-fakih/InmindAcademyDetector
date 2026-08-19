@@ -67,8 +67,23 @@ bash scripts/download_loco.sh "$DATA_DIR"
 export MPLBACKEND=Agg  # see scripts/colab_runner.sh for why this is needed here
 
 # --- 4. Phased train -> eval -> resume ---------------------------------------
-phase=1
-target_epochs=0
+# Detect real progress from weights/last.ckpt itself, not from the loop counter --
+# rerunning this whole cell after a Colab disconnect must pick up from wherever
+# training actually got to, not restart phase 1 and overwrite a further-along
+# checkpoint.
+LAST_CKPT="${RUNS_DIR}/weights/last.ckpt"
+completed_epochs=0
+if [[ -f "$LAST_CKPT" ]]; then
+    completed_epochs=$(python3 -c "
+import torch
+ckpt = torch.load('${LAST_CKPT}', map_location='cpu', weights_only=True)
+print(ckpt['epoch'] + 1)
+")
+    echo "[setup] found existing checkpoint at epoch ${completed_epochs} -- resuming from there"
+fi
+
+phase=$(( completed_epochs / PHASE_EPOCHS + 1 ))
+target_epochs=$(( completed_epochs ))
 while [[ "$target_epochs" -lt "$TOTAL_EPOCHS" ]]; do
     target_epochs=$(( phase * PHASE_EPOCHS ))
     if [[ "$target_epochs" -gt "$TOTAL_EPOCHS" ]]; then
@@ -86,13 +101,15 @@ with open('colab_config.yaml', 'w') as f:
     yaml.safe_dump(config, f, sort_keys=False)
 "
 
+    # Resume whenever a checkpoint already exists -- true fresh start only on the
+    # very first phase of a brand-new run (no last.ckpt at all yet).
     RESUME_FLAG=""
-    if [[ "$phase" -gt 1 ]]; then
+    if [[ -f "$LAST_CKPT" ]]; then
         RESUME_FLAG="--resume last"
     fi
 
     echo "[phase $phase] training to epoch ${target_epochs}/${TOTAL_EPOCHS}..."
-    uv run train.py --config colab_config.yaml $RESUME_FLAG 2>&1 | tee "train-phase${phase}.log"
+    uv run train.py --config colab_config.yaml $RESUME_FLAG 2>&1 | tee -a "train-phase${phase}.log"
 
     echo "[phase $phase] evaluating best.pt on subsets 1/4 (full eval.py)..."
     uv run eval.py --config colab_config.yaml --weights "${RUNS_DIR}/weights/best.pt" \
@@ -101,4 +118,4 @@ with open('colab_config.yaml', 'w') as f:
     phase=$(( phase + 1 ))
 done
 
-echo "[done] ${TOTAL_EPOCHS} epochs across $(( phase - 1 )) phases. See eval-phase*.log for each checkpoint's test mAP@0.5."
+echo "[done] ${TOTAL_EPOCHS} epochs. See eval-phase*.log for each checkpoint's test mAP@0.5."
