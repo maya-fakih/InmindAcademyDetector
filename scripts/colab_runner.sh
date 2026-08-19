@@ -3,24 +3,30 @@
 # Or run from a terminal cell after `%cd InmindAcademyDetector`.
 #
 # Usage:
-#   !bash scripts/colab_runner.sh                        -- fresh run, yolo26s-coco (default)
-#   !bash scripts/colab_runner.sh resume                 -- resume yolo26s-coco
-#   !bash scripts/colab_runner.sh fresh yolo26s-small-coco  -- fresh run on another branch
-#   !bash scripts/colab_runner.sh resume yolo26s-small-coco -- resume another branch
+#   !bash scripts/colab_runner.sh                             -- auto: resumes yolo26s-coco
+#                                                                 if a checkpoint exists on
+#                                                                 Drive, else starts fresh
+#   !bash scripts/colab_runner.sh resume                      -- resume yolo26s-coco from last.ckpt
+#   !bash scripts/colab_runner.sh resume-best                 -- fine-tune yolo26s-coco from best.ckpt
+#   !bash scripts/colab_runner.sh fresh yolo26s-small-coco    -- explicitly discard and restart
+#   !bash scripts/colab_runner.sh resume yolo26s-small-coco   -- resume another branch from last.ckpt
+#   !bash scripts/colab_runner.sh resume-best yolo26s-small-coco -- fine-tune another branch from best.ckpt
 #
-# A fresh run never touches an existing checkpoint's training state, but if a
-# previous run's weights/ directory exists it gets moved aside first (renamed
-# with a timestamp) instead of being silently overwritten -- so switching
-# training regimes (e.g. adding freeze/warmup) doesn't accidentally resume
-# from or clobber a run trained under the old settings.
+# The only way to discard an existing checkpoint is to type "fresh" explicitly.
+# Omitting the mode used to mean the same thing as typing "fresh" -- which is
+# exactly the footgun that kept quietly restarting runs from scratch (each
+# restart moving the previous weights/ into a weights-backup-<timestamp>/
+# folder instead of erroring, so it looked "successful" every time while
+# silently throwing away all prior training). Now, omitting it auto-detects:
+# if weights/last.ckpt is already there, it resumes; only an empty weights/
+# dir (a genuinely first run) proceeds fresh with nothing to discard.
 #
 # What it does, in order:
 #   1. Clone/pull the repo (idempotent — safe to rerun after a disconnect).
 #   2. Install dependencies with uv.
 #   3. Mount Drive; dataset + checkpoints persist under
 #      MyDrive/InmindAcademyDetector-${BRANCH}/, not the ephemeral VM disk.
-#   4. Train for config.yaml's epoch count -- resuming only if "resume" was
-#      passed as the first argument and weights/last.ckpt exists on Drive.
+#   4. Train for config.yaml's epoch count, resuming/fine-tuning per MODE above.
 #   5. Evaluate the best checkpoint on subsets 1/4 once training finishes.
 #
 # Everything is logged to train.log / eval.log so you can check progress or
@@ -28,9 +34,9 @@
 
 set -euo pipefail
 
-MODE="${1:-fresh}"
-if [[ "$MODE" != "fresh" && "$MODE" != "resume" ]]; then
-    echo "[error] first argument must be 'resume' or omitted (defaults to fresh)" >&2
+MODE="${1:-auto}"
+if [[ "$MODE" != "fresh" && "$MODE" != "resume" && "$MODE" != "resume-best" && "$MODE" != "auto" ]]; then
+    echo "[error] first argument must be 'resume', 'resume-best', 'fresh', or omitted (auto-detects)" >&2
     exit 1
 fi
 
@@ -104,15 +110,32 @@ with open('colab_config.yaml', 'w') as f:
     yaml.safe_dump(config, f, sort_keys=False)
 "
 
-# --- 4. Train (resume only if explicitly requested) --------------------------
+# --- 4. Train (mode resolved above -- "auto" is decided now that RUNS_DIR is known) ---
+if [[ "$MODE" == "auto" ]]; then
+    if [[ -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
+        echo "[train] found an existing checkpoint at ${RUNS_DIR}/weights/last.ckpt --"
+        echo "        resuming automatically (pass 'fresh' explicitly to discard it instead)"
+        MODE="resume"
+    else
+        echo "[train] no existing checkpoint found -- starting fresh"
+        MODE="fresh"
+    fi
+fi
+
 RESUME_FLAG=""
-if [[ "$MODE" == "resume" ]]; then
-    if [[ ! -f "${RUNS_DIR}/weights/last.ckpt" ]]; then
-        echo "[error] resume requested but no ${RUNS_DIR}/weights/last.ckpt found" >&2
+if [[ "$MODE" == "resume" || "$MODE" == "resume-best" ]]; then
+    CKPT_NAME="last.ckpt"
+    RESUME_ARG="last"
+    if [[ "$MODE" == "resume-best" ]]; then
+        CKPT_NAME="best.ckpt"
+        RESUME_ARG="best"
+    fi
+    if [[ ! -f "${RUNS_DIR}/weights/${CKPT_NAME}" ]]; then
+        echo "[error] $MODE requested but no ${RUNS_DIR}/weights/${CKPT_NAME} found" >&2
         exit 1
     fi
-    echo "[train] resume requested — continuing from last.ckpt"
-    RESUME_FLAG="--resume last"
+    echo "[train] $MODE requested — continuing from ${CKPT_NAME}"
+    RESUME_FLAG="--resume ${RESUME_ARG}"
 elif [[ -d "${RUNS_DIR}/weights" ]]; then
     BACKUP_DIR="${RUNS_DIR}/weights-backup-$(date +%Y%m%d-%H%M%S)"
     echo "[train] fresh run requested but weights/ already exists — moving it to"
