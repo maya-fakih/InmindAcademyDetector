@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -29,93 +29,44 @@ class DetectionTarget(TypedDict):
     labels: Tensor
 
 
-# --- DEMONSTRATION SPLIT (intentional, not a real methodology) --------------
-# This branch (frcnn-mobilenetv3-augment) deliberately selects validation
-# images that best resemble the TEST subsets' (1/4) category distribution,
-# instead of a distribution-neutral split. This is NOT a fix for the class
-# imbalance -- it is a worked example of split-induced metric inflation:
-# validation (and therefore best.ckpt selection + reported val mAP) is biased
-# toward the test-like slice of the *training-visible* subsets 2/3/5, without
-# ever reading subsets 1/4's images or labels. No pixels or annotations from
-# the real held-out test set leak into training. The inflation comes purely
-# from correlating which *development* images we validate on with what the
-# test set looks like -- the point being that this alone measurably moves the
-# reported number even though nothing "leaked" in the traditional sense.
-# See RESULTS.md for the explicit before/after comparison and disclosure.
-# ------------------------------------------------------------------------
+# --- AMIR RECIPE SPLIT --------------------------------------------------
+# This branch (frcnn-amir-recipe) is a from-scratch reproduction attempt of
+# the split methodology used on Amir's `exp/03-recipe` branch
+# (https://github.com/amiroo-star/inmind-detector, branch exp/03-recipe):
+# train on whole subsets 2 and 5, validate on the *whole* of subset 3 as an
+# unseen-warehouse holdout, and reserve subsets 1/4 for final test exactly
+# as the assignment requires. This is deliberately different from both the
+# assignment-template's "1-in-5 images per development subset" split and
+# from this repo's own frcnn-mobilenetv3-augment demo split (which keeps
+# validation *within* all three development subsets but biases which
+# images land in it). Here validation is a whole subset the model never
+# trains on, at all -- closer in spirit to how subsets 1/4 will actually
+# be evaluated. Nothing from subsets 1/4 is read at training or
+# checkpoint-selection time.
+#
+# Reported comparison point (NOT reproduced in this repo -- Amir's repo has
+# no committed run logs / history.json to verify against): Amir reports
+# ~26% test-set accuracy after 20 epochs on his own branch. See RESULTS.md.
+# --------------------------------------------------------------------------
 
 # Each LOCO annotation file is COCO JSON. The fields used here are:
 #   images:      id, path (absolute inside the archive), width, height
 #   annotations: image_id, category_id, bbox as [x, y, width, height], iscrowd
 #   categories:  id, name
-DEVELOPMENT_FILES = (
+TRAIN_FILES = (
     "loco-sub2-v1-train.json",
-    "loco-sub3-v1-train.json",
     "loco-sub5-v1-train.json",
 )
+VALIDATION_FILES = ("loco-sub3-v1-train.json",)
 TEST_FILES = (
     "loco-sub1-v1-val.json",
     "loco-sub4-v1-val.json",
 )
 SUBSET_FILES: dict[str, tuple[str, ...]] = {
-    "train": DEVELOPMENT_FILES,
-    "validation": DEVELOPMENT_FILES,
+    "train": TRAIN_FILES,
+    "validation": VALIDATION_FILES,
     "test": TEST_FILES,
 }
-
-# Fraction of each development subset reserved for validation (demo split).
-VALIDATION_FRACTION = 0.2
-
-
-def _test_category_distribution(raw_dir: Path) -> dict[int, float]:
-    """Category frequency vector of the TEST subsets (1/4), for the demo split.
-
-    Reads only ``annotations`` (category ids + counts) from the test JSON --
-    never image pixels, never used to pick which test images exist or don't.
-    Cached per raw_dir since every dataset instantiation needs it.
-    """
-    counts: Counter = Counter()
-    for filename in TEST_FILES:
-        data = json.loads((raw_dir / ANNOTATIONS_DIRNAME / filename).read_text(encoding="utf-8"))
-        counts.update(annotation["category_id"] for annotation in data["annotations"])
-    total = sum(counts.values()) or 1
-    return {category_id: count / total for category_id, count in counts.items()}
-
-
-def _test_likeness_rank(
-    subset_images: list[dict],
-    subset_annotations: list[dict],
-    test_distribution: dict[int, float],
-) -> list[int]:
-    """Indices into ``subset_images``, most test-like first (cosine similarity).
-
-    This is the deliberately biased selector: images whose own category mix
-    correlates with the test set's overall mix get pulled into validation
-    first, inflating val mAP relative to a distribution-neutral split.
-    """
-    by_image: defaultdict[int, Counter] = defaultdict(Counter)
-    for annotation in subset_annotations:
-        by_image[annotation["image_id"]][annotation["category_id"]] += 1
-
-    def similarity(image: dict) -> float:
-        image_counts = by_image.get(image["id"], Counter())
-        total = sum(image_counts.values())
-        if total == 0:
-            return -1.0  # unlabeled images are least "test-like"; keep them in train
-        num = sum(
-            (count / total) * test_distribution.get(category_id, 0.0)
-            for category_id, count in image_counts.items()
-        )
-        denom = np.sqrt(sum((count / total) ** 2 for count in image_counts.values())) * np.sqrt(
-            sum(value**2 for value in test_distribution.values())
-        )
-        return float(num / denom) if denom else -1.0
-
-    order = sorted(
-        range(len(subset_images)), key=lambda i: similarity(subset_images[i]), reverse=True
-    )
-    return order
-
 
 # Image ``path`` values are absolute within the LOCO archive and start with this prefix.
 LOCO_ARCHIVE_ROOT = "/dataset"
@@ -123,7 +74,13 @@ ANNOTATIONS_DIRNAME = "rgb"
 
 
 class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
-    """Load a LOCO split with boxes in absolute ``xyxy`` coordinates."""
+    """Load a LOCO split with boxes in absolute ``xyxy`` coordinates.
+
+    Unlike the assignment template and the frcnn-mobilenetv3-augment demo
+    branch, every split here uses *whole* subsets (see ``SUBSET_FILES``
+    above) -- there is no per-image holdout fraction to compute, so every
+    image in a split's files is used in full.
+    """
 
     def __init__(
         self,
@@ -148,8 +105,6 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
         self.annotations: defaultdict[int, list[dict]] = defaultdict(list)
         categories: list[dict] | None = None
 
-        test_distribution = _test_category_distribution(raw_dir) if split != "test" else {}
-
         for filename in SUBSET_FILES[split]:
             subset = self._load_subset(raw_dir / ANNOTATIONS_DIRNAME / filename)
             subset_categories = sorted(subset["categories"], key=lambda category: category["id"])
@@ -159,23 +114,9 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
                 raise ValueError(f"Category definitions differ in {filename}")
 
             source_image_ids = {image["id"] for image in subset["images"]}
-            validation_ids: set[int] = set()
-            if split != "test":
-                # DEMO SPLIT: rank this subset's images by resemblance to the test
-                # set's category distribution and take the top VALIDATION_FRACTION
-                # as validation. See the module docstring above for why.
-                rank = _test_likeness_rank(
-                    subset["images"], subset["annotations"], test_distribution
-                )
-                n_val = round(VALIDATION_FRACTION * len(subset["images"]))
-                validation_ids = {subset["images"][i]["id"] for i in rank[:n_val]}
-
             image_ids: dict[int, int] = {}
             for image in subset["images"]:
-                if split != "test":
-                    is_validation = image["id"] in validation_ids
-                    if (split == "validation") != is_validation:
-                        continue
+                # Whole-subset split: every image in this file belongs to this split.
                 image_id = len(self.images) + 1
                 image_ids[image["id"]] = image_id
                 self.images.append({**image, "id": image_id})

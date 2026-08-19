@@ -1,3 +1,9 @@
+# frcnn-amir-recipe: reproduction attempt of Amir's exp/03-recipe split
+# (https://github.com/amiroo-star/inmind-detector) -- train on subsets 2+5,
+# validate on the whole of subset 3 (unseen-warehouse holdout), test on 1+4.
+# See dataset.py and RESULTS.md for details and the (unreproduced) reported
+# comparison point.
+
 data:
   raw_dir: dataset
 
@@ -15,7 +21,12 @@ train:
 
 augment:
   enabled: true
-  background_swap_prob: 0.6
+  # Disabled here (Amir's recipe uses no augmentation at all). hflip/scale/color
+  # jitter are kept on -- they're label-preserving and don't touch which pixels
+  # come from which warehouse -- but background-swap specifically borrows
+  # pixels across images and would blur the "unseen warehouse" validation
+  # signal this split is meant to isolate, so it stays off on this branch.
+  background_swap_prob: 0.0
   hflip_prob: 0.5
   scale_jitter_prob: 0.5
   color_jitter_prob: 0.5

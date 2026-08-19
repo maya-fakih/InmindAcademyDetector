@@ -1,12 +1,14 @@
-"""Train the LOCO Faster R-CNN baseline."""
+"""Train the LOCO Faster R-CNN baseline (Amir-recipe split)."""
 
 import argparse
+import json
 import math
 import random
 import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import wandb
 from torch.optim import SGD
@@ -18,6 +20,23 @@ from dataset import LocoDataset, collate_fn
 from metrics.accuracy import compute_map50
 from models.baseline import create_model
 from utils.config import load_config
+
+
+def seed_everything(seed: int) -> None:
+    """Seed every RNG the training loop touches, plus force deterministic cuDNN kernels.
+
+    torch.manual_seed alone doesn't cover numpy (used by dataset augmentation via
+    np.random under the hood in some ops) or CUDA's own generator, and cuDNN's default
+    algorithm selection is non-deterministic across runs even with fixed seeds. This
+    matters specifically for this branch: it's a from-scratch reproduction attempt of
+    Amir's reported numbers, so run-to-run determinism is the whole point.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def compute_lr(
@@ -35,8 +54,7 @@ def compute_lr(
 def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
     """Train the detector and save the best weights."""
     settings = config["train"]
-    torch.manual_seed(settings["seed"])
-    random.seed(settings["seed"])
+    seed_everything(settings["seed"])
 
     data = config["data"]
     augment = config.get("augment", {})
@@ -98,6 +116,14 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     weights_dir.mkdir(parents=True, exist_ok=True)
     last_checkpoint_path = weights_dir / "last.ckpt"
     best_checkpoint_path = weights_dir / "best.ckpt"
+    # Per-epoch record (loss, val_mAP50, lr, and periodic test_mAP50) so the run can be
+    # plotted or compared to Amir's reported numbers without needing wandb. Written after
+    # every epoch, not just at the end, so a Colab disconnect doesn't lose the history --
+    # loaded back in on resume so the file stays one continuous record across sessions.
+    history_path = Path(config["output_dir"]) / "history.json"
+    history: list[dict[str, float]] = []
+    if history_path.is_file():
+        history = json.loads(history_path.read_text(encoding="utf-8"))
 
     # Peek the checkpoint's epoch (if resuming) the same way yolo26s-coco/yolov4t-loco
     # do, so a Colab disconnect mid-run can actually be continued instead of losing
@@ -109,6 +135,10 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     if resume_path is not None and resume_path.is_file():
         checkpoint = torch.load(resume_path, map_location=device, weights_only=True)
         start_epoch = checkpoint["epoch"] + 1
+        # Drop any history entries past the checkpoint's epoch -- a crash between
+        # writing history.json and saving the checkpoint could otherwise leave stale
+        # rows for epochs we're about to redo.
+        history = [entry for entry in history if entry["epoch"] <= start_epoch]
 
     model = create_model(train_dataset.num_classes).to(device)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -188,6 +218,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
                     "epoch_seconds": epoch_seconds,
                 }
             )
+        test_map50: float | None = None
         if test_eval_every > 0 and (
             (epoch + 1) % test_eval_every == 0 or (epoch + 1) == settings["epochs"]
         ):
@@ -195,6 +226,18 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             print(f"  [TEST subsets 1/4] epoch {epoch + 1}: test_mAP50 {test_map50:.4f}")
             if run is not None:
                 run.log({"epoch": epoch + 1, "test_mAP50": test_map50})
+
+        history.append(
+            {
+                "epoch": epoch + 1,
+                "train_loss": epoch_loss,
+                "val_mAP50": map50,
+                "lr": current_lr,
+                "epoch_seconds": epoch_seconds,
+                "test_mAP50": test_map50,
+            }
+        )
+        history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
         if map50 > best_map:
             best_map = map50

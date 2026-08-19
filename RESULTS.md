@@ -10,6 +10,35 @@ This is just the running scoreboard.
 
 Target: 0.70 mAP@0.5.
 
+## frcnn-amir-recipe: unseen-warehouse validation split
+
+This branch reproduces (from scratch, own code) the split methodology used
+on Amir's `exp/03-recipe` branch
+([amiroo-star/inmind-detector](https://github.com/amiroo-star/inmind-detector)):
+train on whole subsets 2 and 5, validate on the whole of subset 3 as an
+unseen warehouse the model never trains on, test on subsets 1/4 unchanged.
+This is different from both the assignment template's split (1-in-5 images
+per development subset) and this repo's own `frcnn-mobilenetv3-augment`
+demo split (biased-but-in-domain validation). See `dataset.py` on this
+branch for the implementation and full rationale.
+
+**Comparison point -- reported by Amir, not reproduced here:** Amir's README
+and commit history report ~26% test-set accuracy after 20 epochs on his
+`exp/03-recipe` branch. His repo has no committed `history.json` or run logs
+to verify that number against, so it's recorded here purely as a reference
+target, not a validated result. This branch's own `history.json`
+(train_loss, val_mAP50, lr, periodic test_mAP50) is written every epoch to
+`output_dir/history.json` once a run completes, so future entries in the
+table above from this branch will be reproducible from a committed log,
+unlike Amir's figure.
+
+Also notable: Amir's branch has no learning-rate curve or schedule logging
+at all (flat LR, no warmup/decay, nothing recorded per epoch). This branch
+uses this repo's existing cosine warmup/decay schedule and logs `lr` into
+`history.json` every epoch, so `results/generate_report.py`'s LR-vs-epoch
+panel is populated here even though it wouldn't be if the run matched
+Amir's setup literally.
+
 ## ⚠️ frcnn-mobilenetv3-augment: validation split is intentionally biased (demo)
 
 This branch's `dataset.py` selects validation images by similarity to the
