@@ -75,6 +75,23 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         num_workers=settings["num_workers"],
         collate_fn=collate_fn,
     )
+    # Held-out test set (subsets 1/4) -- never trained/tuned on. Checked periodically
+    # during training (see `test_eval_every` below) purely so long unattended runs
+    # leave a trail comparing val-selection mAP against true held-out mAP, in case
+    # the session dies before a human gets to run eval.py by hand. Same pattern as
+    # yolov4t-loco; never used to pick best.pt, which stays selected on val_loader
+    # -- i.e. on *this* branch's intentionally biased validation set. That's the
+    # whole point of the demonstration (see RESULTS.md): the gap this reveals
+    # between val_mAP50 and the periodic test_mAP50 points *is* the finding.
+    test_dataset = LocoDataset(Path(data["raw_dir"]), split="test")
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=settings["batch_size"],
+        shuffle=False,
+        num_workers=settings["num_workers"],
+        collate_fn=collate_fn,
+    )
+    test_eval_every = settings.get("test_eval_every", 0)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     weights_dir = Path(config["output_dir"]) / "weights"
@@ -171,6 +188,14 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
                     "epoch_seconds": epoch_seconds,
                 }
             )
+        if test_eval_every > 0 and (
+            (epoch + 1) % test_eval_every == 0 or (epoch + 1) == settings["epochs"]
+        ):
+            test_map50 = compute_map50(model, test_loader, device)
+            print(f"  [TEST subsets 1/4] epoch {epoch + 1}: test_mAP50 {test_map50:.4f}")
+            if run is not None:
+                run.log({"epoch": epoch + 1, "test_mAP50": test_map50})
+
         if map50 > best_map:
             best_map = map50
             torch.save(model.state_dict(), weights_dir / "best.pt")
