@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -111,8 +111,11 @@ def _test_likeness_rank(
         )
         return float(num / denom) if denom else -1.0
 
-    order = sorted(range(len(subset_images)), key=lambda i: similarity(subset_images[i]), reverse=True)
+    order = sorted(
+        range(len(subset_images)), key=lambda i: similarity(subset_images[i]), reverse=True
+    )
     return order
+
 
 # Image ``path`` values are absolute within the LOCO archive and start with this prefix.
 LOCO_ARCHIVE_ROOT = "/dataset"
@@ -145,9 +148,7 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
         self.annotations: defaultdict[int, list[dict]] = defaultdict(list)
         categories: list[dict] | None = None
 
-        test_distribution = (
-            _test_category_distribution(raw_dir) if split != "test" else {}
-        )
+        test_distribution = _test_category_distribution(raw_dir) if split != "test" else {}
 
         for filename in SUBSET_FILES[split]:
             subset = self._load_subset(raw_dir / ANNOTATIONS_DIRNAME / filename)
@@ -163,7 +164,9 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
                 # DEMO SPLIT: rank this subset's images by resemblance to the test
                 # set's category distribution and take the top VALIDATION_FRACTION
                 # as validation. See the module docstring above for why.
-                rank = _test_likeness_rank(subset["images"], subset["annotations"], test_distribution)
+                rank = _test_likeness_rank(
+                    subset["images"], subset["annotations"], test_distribution
+                )
                 n_val = round(VALIDATION_FRACTION * len(subset["images"]))
                 validation_ids = {subset["images"][i]["id"] for i in rank[:n_val]}
 
