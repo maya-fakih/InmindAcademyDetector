@@ -10,34 +10,45 @@ This is just the running scoreboard.
 
 Target: 0.70 mAP@0.5.
 
-## frcnn-amir-recipe: unseen-warehouse validation split
+## frcnn-amir-recipe: mirrors Amir's exp/03-recipe branch (teammate collaboration)
 
-This branch reproduces (from scratch, own code) the split methodology used
-on Amir's `exp/03-recipe` branch
-([amiroo-star/inmind-detector](https://github.com/amiroo-star/inmind-detector)):
-train on whole subsets 2 and 5, validate on the whole of subset 3 as an
-unseen warehouse the model never trains on, test on subsets 1/4 unchanged.
-This is different from both the assignment template's split (1-in-5 images
-per development subset) and this repo's own `frcnn-mobilenetv3-augment`
-demo split (biased-but-in-domain validation). See `dataset.py` on this
-branch for the implementation and full rationale.
+Disclosed collaboration: Amir is a teammate on this project. We agreed I'd
+lead with yolo26s-small-coco (best results on my side so far) and he'd try
+his own recipe on Faster R-CNN; this branch reproduces his approach for a
+side-by-side comparison, to be discussed openly in the presentation. Not an
+independent methodology -- credited throughout as ported from
+[amiroo-star/inmind-detector, branch exp/03-recipe](https://github.com/amiroo-star/inmind-detector/tree/exp/03-recipe).
 
-**Comparison point -- reported by Amir, not reproduced here:** Amir's README
-and commit history report ~26% test-set accuracy after 20 epochs on his
-`exp/03-recipe` branch. His repo has no committed `history.json` or run logs
-to verify that number against, so it's recorded here purely as a reference
-target, not a validated result. This branch's own `history.json`
-(train_loss, val_mAP50, lr, periodic test_mAP50) is written every epoch to
-`output_dir/history.json` once a run completes, so future entries in the
-table above from this branch will be reproducible from a committed log,
-unlike Amir's figure.
+Mirrored end to end:
+- **Split** (`dataset.py`): train on whole subsets 2+5, validate on the
+  whole of subset 3 as an unseen-warehouse holdout, test on 1+4 unchanged.
+- **Model** (`models/baseline.py`, `config.yaml` `model.name`):
+  `fasterrcnn_mobilenet_v3_large_320_fpn` (320px input, 6.8 GFLOPs) instead
+  of this repo's stock 42.3-GFLOPs baseline.
+- **Augmentation** (`dataset.py`'s `_augment`): horizontal flip + brightness/
+  contrast/saturation jitter, train split only -- his exact function, not
+  this repo's separate background-swap/scale-jitter pipeline.
+- **LR schedule** (`train.py`): warmup + cosine decay stepped per batch
+  (`schedule: cosine`, `warmup_fraction: 0.05`), matching his schedule
+  shape rather than this repo's old per-epoch schedule.
 
-Also notable: Amir's branch has no learning-rate curve or schedule logging
-at all (flat LR, no warmup/decay, nothing recorded per epoch). This branch
-uses this repo's existing cosine warmup/decay schedule and logs `lr` into
-`history.json` every epoch, so `results/generate_report.py`'s LR-vs-epoch
-panel is populated here even though it wouldn't be if the run matched
-Amir's setup literally.
+Added on top of his pipeline, not present on his branch:
+- `test_eval_every: 10` -- periodic held-out subsets-1/4 monitoring during
+  training, logged as `[TEST subsets 1/4]`, never used for `best.pt`
+  selection.
+- `history.json` -- per-epoch train_loss/val_mAP50/lr/test_mAP50, written
+  every epoch (survives a Colab disconnect), which is what
+  `results/generate_report.py`'s LR-vs-epoch panel plots. Amir's branch
+  also writes `lr` into its own `history.json` every epoch, but has no
+  report generator to plot it -- this branch reuses this repo's existing
+  `results/generate_report.py`, so the same numbers actually get charted.
+
+**Comparison point -- reported by Amir, not reproduced here:** his README/
+commits report ~26% test-set accuracy after a 20-epoch run. His current
+`config.yaml` is set to 40 epochs, and his repo has no committed
+`history.json` or run log for the 20-epoch run the 26% figure came from, so
+it's recorded here as a reference target pending an actual comparable run
+on this branch, not a validated result.
 
 ## ⚠️ frcnn-mobilenetv3-augment: validation split is intentionally biased (demo)
 

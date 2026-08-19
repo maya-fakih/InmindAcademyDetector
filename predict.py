@@ -71,7 +71,7 @@ def main() -> None:
     if args.num_images < 1:
         parser.error("Number of images must be at least 1")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = create_model(dataset.num_classes)
+    model = create_model(dataset.num_classes, config.get("model"))
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
     model.to(device)
     model.eval()

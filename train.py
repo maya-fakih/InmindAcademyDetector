@@ -12,6 +12,7 @@ import numpy as np
 import torch
 import wandb
 from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from wandb.sdk.wandb_run import Run
@@ -39,16 +40,19 @@ def seed_everything(seed: int) -> None:
     torch.backends.cudnn.benchmark = False
 
 
-def compute_lr(
-    epoch: int, base_lr: float, warmup_epochs: int, total_epochs: int, final_fraction: float
-) -> float:
-    """Linear warmup for `warmup_epochs`, then cosine decay to `final_fraction` of base_lr."""
-    if warmup_epochs > 0 and epoch < warmup_epochs:
-        return base_lr * (epoch + 1) / warmup_epochs
-    span = max(1, total_epochs - warmup_epochs)
-    progress = min((epoch - warmup_epochs) / span, 1.0)
-    cosine = 0.5 * (1 + math.cos(math.pi * progress))
-    return base_lr * final_fraction + (base_lr - base_lr * final_fraction) * cosine
+def lr_lambda_at(step: int, total_steps: int, warmup_steps: int) -> float:
+    """Warmup then cosine decay to 0, stepped per batch -- mirrors Amir's exp/03-recipe.
+
+    Ported here (rather than kept as our old per-epoch compute_lr) because that's the
+    actual shape of the schedule Amir ran, and this branch's whole point is comparing
+    against his recipe. Detection losses are large and noisy in the first hundred steps
+    because the new class head is random, and a full-rate step on that gradient can undo
+    the pretrained backbone; the warmup avoids it.
+    """
+    if step < warmup_steps:
+        return step / warmup_steps
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 def train(config: dict[str, Any], run: Run | None, resume_from: str | None = None) -> None:
@@ -57,22 +61,15 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     seed_everything(settings["seed"])
 
     data = config["data"]
-    augment = config.get("augment", {})
-    if augment.get("enabled", False):
-        train_dataset = LocoDataset(
-            Path(data["raw_dir"]),
-            split="train",
-            background_swap_prob=augment.get("background_swap_prob", 0.0),
-            hflip_prob=augment.get("hflip_prob", 0.0),
-            scale_jitter_prob=augment.get("scale_jitter_prob", 0.0),
-            color_jitter_prob=augment.get("color_jitter_prob", 0.0),
-        )
-    else:
-        train_dataset = LocoDataset(Path(data["raw_dir"]), split="train")
+    # Amir's recipe: a single `augment: true/false` flag (flip + photometric jitter,
+    # see dataset.py's _augment), not the multi-knob augmentation.py pipeline the
+    # frcnn-mobilenetv3-augment branch uses.
+    train_dataset = LocoDataset(
+        Path(data["raw_dir"]), split="train", augment=settings.get("augment", False)
+    )
     # Validation must stay clean -- it's what best.pt is selected on, so augmenting
     # it would make "best" mean "best on artificially varied backgrounds" instead
-    # of "best on this warehouse's real val images". LocoDataset itself also
-    # forces these to 0 off the train split, this is just not passing them at all.
+    # of "best on this warehouse's real val images".
     val_dataset = LocoDataset(Path(data["raw_dir"]), split="validation")
     if train_dataset.category_labels != val_dataset.category_labels:
         raise ValueError("Training and validation splits define different categories")
@@ -96,11 +93,9 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     # Held-out test set (subsets 1/4) -- never trained/tuned on. Checked periodically
     # during training (see `test_eval_every` below) purely so long unattended runs
     # leave a trail comparing val-selection mAP against true held-out mAP, in case
-    # the session dies before a human gets to run eval.py by hand. Same pattern as
-    # yolov4t-loco; never used to pick best.pt, which stays selected on val_loader
-    # -- i.e. on *this* branch's intentionally biased validation set. That's the
-    # whole point of the demonstration (see RESULTS.md): the gap this reveals
-    # between val_mAP50 and the periodic test_mAP50 points *is* the finding.
+    # the session dies before a human gets to run eval.py by hand. Never used to
+    # pick best.pt, which stays selected on val_loader (subset 3, unseen-warehouse
+    # holdout -- see dataset.py and RESULTS.md for why this split was chosen).
     test_dataset = LocoDataset(Path(data["raw_dir"]), split="test")
     test_loader = DataLoader(
         test_dataset,
@@ -140,7 +135,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         # rows for epochs we're about to redo.
         history = [entry for entry in history if entry["epoch"] <= start_epoch]
 
-    model = create_model(train_dataset.num_classes).to(device)
+    model = create_model(train_dataset.num_classes, config.get("model")).to(device)
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = SGD(
         params,
@@ -148,6 +143,16 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         momentum=settings["momentum"],
         weight_decay=settings["weight_decay"],
     )
+    # Per-batch warmup + cosine decay, matching Amir's exp/03-recipe schedule shape
+    # (as opposed to a per-epoch schedule). `scheduler.step()` is called once per
+    # optimizer.step() below, not once per epoch.
+    scheduler = None
+    if settings.get("schedule", "none") == "cosine":
+        total_steps = settings["epochs"] * len(train_loader)
+        warmup_steps = max(1, int(total_steps * settings.get("warmup_fraction", 0.05)))
+        scheduler = LambdaLR(
+            optimizer, lambda step: lr_lambda_at(step, total_steps, warmup_steps)
+        )
     best_map = -1.0
 
     if checkpoint is not None:
@@ -166,16 +171,6 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         )
 
     for epoch in range(start_epoch, settings["epochs"]):
-        current_lr = compute_lr(
-            epoch,
-            settings["learning_rate"],
-            settings.get("warmup_epochs", 0),
-            settings["epochs"],
-            settings.get("lr_final_fraction", 1.0),
-        )
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = current_lr
-
         epoch_start = time.perf_counter()
         model.train()
         epoch_loss = 0.0
@@ -199,10 +194,13 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
             epoch_loss += loss.item()
             progress.set_postfix(loss=f"{epoch_loss / (step + 1):.4f}")
 
         epoch_loss /= len(train_loader)
+        current_lr = optimizer.param_groups[0]["lr"]
         map50 = compute_map50(model, val_loader, device)
         epoch_seconds = time.perf_counter() - epoch_start
         print(
