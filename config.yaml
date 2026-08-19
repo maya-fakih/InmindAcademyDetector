@@ -12,7 +12,7 @@ train:
   # zero times (range(50, 50) is empty). Bumped to 100 so `--resume last`
   # actually continues for 50 more epochs.
   epochs: 100
-  test_eval_every: 25  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
+  test_eval_every: 10  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
   batch_size: 16
   learning_rate: 0.01  # scaled with batch_size (linear scaling rule), still conservative
   lr_final_fraction: 0.01
