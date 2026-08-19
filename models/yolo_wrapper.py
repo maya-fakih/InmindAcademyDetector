@@ -106,7 +106,9 @@ class Yolov4TinyWrapper(nn.Module):
                     f"({size_bytes:,} bytes, expected ~19.6MB) -- redownload before training"
                 )
             self.model.load_weights(weights_path)
-            print(f"[backbone] loaded pretrained weights from {weights_path} ({size_bytes:,} bytes)")
+            print(
+                f"[backbone] loaded pretrained weights from {weights_path} ({size_bytes:,} bytes)"
+            )
         else:
             # Expected/harmless in eval.py and predict.py: they intentionally skip
             # backbone-only pretrain loading here since a full trained checkpoint's

@@ -63,7 +63,12 @@ def split_backbone_head_params(model: torch.nn.Module, num_layers: int):
             target.extend(p for p in layer.parameters() if p.requires_grad)
         return backbone_params, head_params
 
-    if hasattr(model, "model") and hasattr(model.model, "blocks") and hasattr(model.model, "models"):
+    is_darknet = (
+        hasattr(model, "model")
+        and hasattr(model.model, "blocks")
+        and hasattr(model.model, "models")
+    )
+    if is_darknet:
         first_yolo_index = next(
             (i for i, block in enumerate(model.model.blocks) if block["type"] == "yolo"),
             len(model.model.blocks),
@@ -97,7 +102,12 @@ def set_backbone_frozen(model: torch.nn.Module, num_layers: int, frozen: bool) -
                 parameter.requires_grad = not frozen
         return
 
-    if hasattr(model, "model") and hasattr(model.model, "blocks") and hasattr(model.model, "models"):
+    is_darknet = (
+        hasattr(model, "model")
+        and hasattr(model.model, "blocks")
+        and hasattr(model.model, "models")
+    )
+    if is_darknet:
         first_yolo_index = next(
             (i for i, block in enumerate(model.model.blocks) if block["type"] == "yolo"),
             len(model.model.blocks),
@@ -190,9 +200,7 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
     backbone_frozen = freeze_epochs > 0 and start_epoch < freeze_epochs
     if freeze_layers > 0:
         set_backbone_frozen(model, freeze_layers, frozen=backbone_frozen)
-        frozen_params = sum(
-            p.numel() for p in model.parameters() if not p.requires_grad
-        )
+        frozen_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
         total_params = sum(p.numel() for p in model.parameters())
         print(
             f"[freeze] backbone_frozen={backbone_frozen} -- "
