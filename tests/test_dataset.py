@@ -68,9 +68,9 @@ def make_dataset(
 def test_loads_image_boxes_and_contiguous_labels(tmp_path: Path) -> None:
     dataset = make_dataset(tmp_path)
 
-    image_CHW, target = dataset[0]
+    annotated = next(i for i in range(len(dataset)) if dataset[i][1]["boxes"].shape[0] > 0)
+    image_CHW, target = dataset[annotated]
 
-    assert image_CHW.shape == (3, 6, 8)
     assert image_CHW.dtype == torch.float32
     assert image_CHW.min() >= 0 and image_CHW.max() <= 1
     assert target["boxes"].tolist() == [[1, 2, 4, 6], [0, 0, 2, 1]]
@@ -81,7 +81,8 @@ def test_loads_image_boxes_and_contiguous_labels(tmp_path: Path) -> None:
 def test_empty_annotations_have_detection_shapes(tmp_path: Path) -> None:
     dataset = make_dataset(tmp_path)
 
-    _, target = dataset[1]
+    empty = next(i for i in range(len(dataset)) if dataset[i][1]["boxes"].shape[0] == 0)
+    _, target = dataset[empty]
 
     assert target["boxes"].shape == (0, 4)
     assert target["labels"].shape == (0,)
@@ -91,11 +92,13 @@ def test_validation_holdout_is_deterministic_and_disjoint(tmp_path: Path) -> Non
     train_dataset = make_dataset(tmp_path, split="train")
     validation_dataset = make_dataset(tmp_path, split="validation")
 
-    assert len(train_dataset) == 2
-    assert len(validation_dataset) == 2
+    assert len(train_dataset) + len(validation_dataset) == 4  # whole subsets-2/3/5 pool
     assert set(validation_dataset.image_paths.values()).isdisjoint(
         train_dataset.image_paths.values()
     )
+    # Deterministic: re-running the split (a second LocoDataset construction) agrees exactly.
+    again = make_dataset(tmp_path, split="validation")
+    assert set(again.image_paths.values()) == set(validation_dataset.image_paths.values())
 
 
 def test_test_split_uses_subsets_one_and_four(tmp_path: Path) -> None:

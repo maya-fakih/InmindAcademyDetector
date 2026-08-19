@@ -1,22 +1,28 @@
-# frcnn-amir-recipe: mirrors Amir's exp/03-recipe branch end to end
-# (https://github.com/amiroo-star/inmind-detector) -- teammate collaboration,
-# disclosed for the presentation. Train on subsets 2+5, validate on the
-# whole of subset 3 (unseen-warehouse holdout), test on 1+4. Model, augment,
-# and LR schedule below match his config; this branch adds `test_eval_every`
-# (periodic held-out test monitoring) and `history.json` logging on top,
-# which his branch doesn't have. See dataset.py, train.py and RESULTS.md.
+# frcnn-amir-recipe: Amir's actual winning model (exp/03-recipe, EXPERIMENTS.md
+# "slimB"), verified against his real code and experiment log, not the
+# fasterrcnn_mobilenet_v3_large_320_fpn guess this file previously had (that
+# never matched his reported 7,051,673 params / 19.238 GFLOPs -- see git log).
+# There is no ThunderNet/CEM/SAM anywhere in his repo; his recipe is plain
+# slim_mobilenet_fpn already registered in models/baseline.py, just not
+# selected here before now. Validation split deliberately does NOT mirror his
+# (or match the frcnn-mobilenetv3-augment demo's runtime-coupled trick) --
+# see dataset.py for the proportional-to-test-distribution split actually
+# used, and RESULTS.md for why.
 
 data:
   raw_dir: dataset
 
 model:
-  # fasterrcnn_mobilenet_v3_large_fpn      18.97M params, 42.3 GFLOPs  (repo baseline)
-  # fasterrcnn_mobilenet_v3_large_320_fpn  18.97M params,  6.8 GFLOPs  (Amir's recipe -- lighter, 320px input)
-  name: fasterrcnn_mobilenet_v3_large_320_fpn
+  # slim_mobilenet_fpn (12,16)/128/512, 800px -- Amir's EXPERIMENTS.md "slimB",
+  # his best result: 7,051,673 params, 19.238 GFLOPs, 0.2929 test mAP@0.5.
+  name: slim_mobilenet_fpn
+  stages: [12, 16]
+  fpn_channels: 128
+  representation_size: 512
+  min_size: 800
 
 train:
-  epochs: 40          # Amir's config; his reported 26%/test figure was from an earlier
-                       # 20-epoch run of his -- see RESULTS.md, not reproduced here yet.
+  epochs: 30
   test_eval_every: 10  # runs held-out subsets-1/4 eval every N epochs, logged as "[TEST subsets 1/4]"
   augment: true        # horizontal flip + photometric jitter (dataset.py's _augment), train split only
   schedule: cosine      # warmup then cosine decay, stepped per batch

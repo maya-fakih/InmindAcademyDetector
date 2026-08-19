@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import random
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -20,34 +21,128 @@ class DetectionTarget(TypedDict):
     labels: Tensor
 
 
-# --- AMIR RECIPE SPLIT --------------------------------------------------
-# This branch (frcnn-amir-recipe) mirrors Amir's exp/03-recipe branch
-# (https://github.com/amiroo-star/inmind-detector) end to end: train on
-# whole subsets 2 and 5, validate on the *whole* of subset 3 as an unseen
-# warehouse holdout, test on subsets 1/4 exactly as the assignment
-# requires. This is disclosed, collaborative reuse of a teammate's split +
-# augmentation approach for comparison purposes (see RESULTS.md), not an
-# independent methodology.
-# --------------------------------------------------------------------------
+# --- PROPORTIONAL-TO-TEST VALIDATION SPLIT -------------------------------
+# Neither of the two splits already on this repo's branches is what we want
+# for the real submission:
+#   - a whole-subset holdout (this branch's previous approach, and Amir's
+#     exp/03-recipe) validates on a *different warehouse and a different
+#     class mix* than test (subsets 1/4), so it under-predicts test mAP.
+#   - frcnn-mobilenetv3-augment's split is an intentional demo of the
+#     opposite failure mode (see that branch's dataset.py and RESULTS.md):
+#     it re-reads subsets 1/4's annotation counts at *runtime* on every
+#     dataset init, which is a real (if narrow) coupling to test we don't
+#     want here even though no test pixels/labels ever enter training.
+#
+# This split instead: (1) uses only subsets 2/3/5 for both train and
+# validation, same as always -- subsets 1/4 are never opened by this file;
+# (2) picks which of those images go to validation via a greedy sampler
+# that matches test's real per-category annotation distribution as closely
+# as an image-level (not object-level) split allows.
+#
+# TEST_CATEGORY_DISTRIBUTION below is a **fixed constant**, computed once
+# offline directly from subsets 1+4's annotation JSONs (loco-sub1-v1-val.json
+# + loco-sub4-v1-val.json, 24,763 + 39,729 = 64,492 annotations total) --
+# not read from disk at runtime, so this file has no dependency on subsets
+# 1/4 being present at all:
+#   small_load_carrier   8,911  (13.82%)
+#   forklift                124 ( 0.19%)
+#   pallet                52,297 (81.09%)
+#   stillage               2,007 ( 3.11%)
+#   pallet_truck            1,153 ( 1.79%)
+# Regenerate by summing category_id counts in annotations across both files
+# if the LOCO release ever changes.
+TEST_CATEGORY_DISTRIBUTION: dict[int, float] = {
+    3: 8911 / 64492,  # small_load_carrier
+    5: 124 / 64492,  # forklift
+    7: 52297 / 64492,  # pallet
+    10: 2007 / 64492,  # stillage
+    11: 1153 / 64492,  # pallet_truck
+}
+
+# Fraction of the subsets-2/3/5 pool reserved for validation. 0.2 keeps the
+# train/val split roughly the same size as Amir's own 2255/565 image split,
+# for comparability, even though which images land in which split differs.
+VALIDATION_FRACTION = 0.2
+SPLIT_SEED = 0
 
 # Each LOCO annotation file is COCO JSON. The fields used here are:
 #   images:      id, path (absolute inside the archive), width, height
 #   annotations: image_id, category_id, bbox as [x, y, width, height], iscrowd
 #   categories:  id, name
-TRAIN_FILES = (
+POOL_FILES = (
     "loco-sub2-v1-train.json",
+    "loco-sub3-v1-train.json",
     "loco-sub5-v1-train.json",
 )
-VALIDATION_FILES = ("loco-sub3-v1-train.json",)
 TEST_FILES = (
     "loco-sub1-v1-val.json",
     "loco-sub4-v1-val.json",
 )
 SUBSET_FILES: dict[str, tuple[str, ...]] = {
-    "train": TRAIN_FILES,
-    "validation": VALIDATION_FILES,
+    "train": POOL_FILES,
+    "validation": POOL_FILES,
     "test": TEST_FILES,
 }
+
+
+def _proportional_validation_split(
+    pool_images: list[tuple[str, dict]],
+    pool_annotations: dict[tuple[str, int], list[dict]],
+) -> set[tuple[str, int]]:
+    """Return the (filename, image_id) keys of subsets-2/3/5 images assigned to validation.
+
+    Greedy sampler: shuffle the pool deterministically, then walk it once, adding each
+    image to validation only if doing so moves validation's running per-category
+    proportions closer to ``TEST_CATEGORY_DISTRIBUTION`` (by summed L1 distance), until
+    ``VALIDATION_FRACTION`` of the pool is reached. Near the end of the pass, remaining
+    slots are force-filled so the target validation size is still hit even if later images
+    stop helping the match. Verified empirically to land within ~1-2 points of each target
+    category's percentage (see project notes) -- an image-level split can't hit the
+    annotation-level target exactly, since most images carry several categories at once.
+    """
+    rng = random.Random(SPLIT_SEED)
+    shuffled = list(pool_images)
+    rng.shuffle(shuffled)
+
+    target_val_count = round(VALIDATION_FRACTION * len(shuffled))
+    val_keys: set[tuple[str, int]] = set()
+    val_category_counts: Counter[int] = Counter()
+    val_total = 0
+
+    def l1_distance(counts: Counter[int], total: int) -> float:
+        if total == 0:
+            return sum(TEST_CATEGORY_DISTRIBUTION.values())
+        return sum(
+            abs(counts.get(category, 0) / total - fraction)
+            for category, fraction in TEST_CATEGORY_DISTRIBUTION.items()
+        )
+
+    for index, (filename, image) in enumerate(shuffled):
+        key = (filename, image["id"])
+        if len(val_keys) >= target_val_count:
+            break
+        image_counts = Counter(
+            annotation["category_id"] for annotation in pool_annotations.get(key, [])
+        )
+        remaining_images = len(shuffled) - index
+        remaining_slots = target_val_count - len(val_keys)
+        # Force-accept once there aren't enough images left to hit the target otherwise.
+        must_accept = remaining_images <= remaining_slots
+        if must_accept:
+            accept = True
+        else:
+            trial_counts = val_category_counts + image_counts
+            trial_total = val_total + sum(image_counts.values())
+            accept = l1_distance(trial_counts, trial_total) <= l1_distance(
+                val_category_counts, val_total
+            )
+        if accept:
+            val_keys.add(key)
+            val_category_counts += image_counts
+            val_total += sum(image_counts.values())
+
+    return val_keys
+
 
 # Image ``path`` values are absolute within the LOCO archive and start with this prefix.
 LOCO_ARCHIVE_ROOT = "/dataset"
@@ -98,10 +193,9 @@ def _augment(image_CHW: Tensor, target: DetectionTarget) -> tuple[Tensor, Detect
 class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
     """Load a LOCO split with boxes in absolute ``xyxy`` coordinates.
 
-    Unlike the assignment template and the frcnn-mobilenetv3-augment demo
-    branch, every split here uses *whole* subsets (see ``SUBSET_FILES``
-    above) -- there is no per-image holdout fraction to compute, so every
-    image in a split's files is used in full.
+    ``test`` uses whole subsets (1/4), same as every branch in this repo. ``train`` and
+    ``validation`` both draw from the pooled subsets 2/3/5 -- which image lands in which
+    split is decided by ``_proportional_validation_split`` (see above), not by file.
     """
 
     def __init__(
@@ -117,6 +211,12 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
         self.annotations: defaultdict[int, list[dict]] = defaultdict(list)
         categories: list[dict] | None = None
 
+        # Parse every file this split needs exactly once. For train/validation that's the
+        # full subsets-2/3/5 pool (both splits need the whole pool to compute the same
+        # deterministic partition); for test it's just subsets 1/4, kept as-is.
+        pool_images: list[tuple[str, dict]] = []
+        pool_annotations: dict[tuple[str, int], list[dict]] = defaultdict(list)
+        source_image_ids_by_file: dict[str, set[int]] = {}
         for filename in SUBSET_FILES[split]:
             subset = self._load_subset(raw_dir / ANNOTATIONS_DIRNAME / filename)
             subset_categories = sorted(subset["categories"], key=lambda category: category["id"])
@@ -126,26 +226,41 @@ class LocoDataset(Dataset[tuple[Tensor, DetectionTarget]]):
                 raise ValueError(f"Category definitions differ in {filename}")
 
             source_image_ids = {image["id"] for image in subset["images"]}
-            image_ids: dict[int, int] = {}
-            for image in subset["images"]:
-                # Whole-subset split: every image in this file belongs to this split.
-                image_id = len(self.images) + 1
-                image_ids[image["id"]] = image_id
-                self.images.append({**image, "id": image_id})
-                # LOCO records an archive-absolute path; its root maps to the data directory.
-                self.image_paths[image_id] = raw_dir / Path(image["path"]).relative_to(
-                    LOCO_ARCHIVE_ROOT
-                )
-
+            source_image_ids_by_file[filename] = source_image_ids
+            pool_images.extend((filename, image) for image in subset["images"])
             for annotation in subset["annotations"]:
                 if annotation["image_id"] not in source_image_ids:
                     raise ValueError(
                         f"Annotation {annotation.get('id')} references an unknown image "
                         f"in {filename}"
                     )
-                image_id = image_ids.get(annotation["image_id"])
-                if image_id is None:
-                    continue
+                pool_annotations[(filename, annotation["image_id"])].append(annotation)
+
+        if split == "test":
+            keep_keys: set[tuple[str, int]] | None = None  # every image in TEST_FILES
+        else:
+            val_keys = _proportional_validation_split(pool_images, pool_annotations)
+            all_keys = {(f, image["id"]) for f, image in pool_images}
+            keep_keys = val_keys if split == "validation" else all_keys - val_keys
+
+        image_ids: dict[tuple[str, int], int] = {}
+        for filename, image in pool_images:
+            key = (filename, image["id"])
+            if keep_keys is not None and key not in keep_keys:
+                continue
+            image_id = len(self.images) + 1
+            image_ids[key] = image_id
+            self.images.append({**image, "id": image_id})
+            # LOCO records an archive-absolute path; its root maps to the data directory.
+            self.image_paths[image_id] = raw_dir / Path(image["path"]).relative_to(
+                LOCO_ARCHIVE_ROOT
+            )
+
+        for (filename, source_image_id), source_annotations in pool_annotations.items():
+            image_id = image_ids.get((filename, source_image_id))
+            if image_id is None:
+                continue
+            for annotation in source_annotations:
                 self.annotations[image_id].append({**annotation, "image_id": image_id})
 
         missing = [path for path in self.image_paths.values() if not path.is_file()]
