@@ -356,7 +356,26 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
 
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=1.0)
+            if not torch.isfinite(grad_norm):
+                # The loss itself being finite doesn't mean its gradient is: exp() on an
+                # unclamped w/h logit, or atan(w/h) in bboxes_ciou's anchor matching, can
+                # produce a NaN/inf gradient from a perfectly ordinary-looking loss value.
+                # clip_grad_norm_'s total norm is sqrt(sum of squares) across every
+                # parameter -- one NaN gradient anywhere makes the whole norm NaN, and by
+                # default clip_grad_norm_ does not error on that, it scales every
+                # parameter's gradient by a NaN/inf coefficient. optimizer.step() would
+                # then apply that to the entire model in one shot, permanently -- every
+                # later forward pass would produce inf loss for the rest of the run, with
+                # no way to recover short of restarting from a checkpoint. Skip the step
+                # (weights untouched) instead; the "non-finite loss" guard above only
+                # catches an already-bad forward pass, not this.
+                print(
+                    f"  [warn] non-finite grad norm ({grad_norm.item()}) at step {step} "
+                    "-- skipping step, weights left untouched"
+                )
+                optimizer.zero_grad()
+                continue
             optimizer.step()
             epoch_loss += loss.item()
             for name, value in losses.items():
