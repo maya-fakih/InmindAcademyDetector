@@ -10,53 +10,45 @@ This is just the running scoreboard.
 
 Target: 0.70 mAP@0.5.
 
-## frcnn-amir-recipe: Amir's actual recipe + a properly-fitted validation split
+## frcnn-amir-recipe: mirrors Amir's exp/03-recipe branch (teammate collaboration)
 
-Disclosed collaboration: Amir is a teammate on this project. This branch
-reproduces his winning architecture exactly (verified against his real
-`exp/03-recipe` code and `EXPERIMENTS.md`, not assumed), but deliberately
-does **not** copy his validation split -- see below for why, and why it
-also doesn't reuse `frcnn-mobilenetv3-augment`'s demo split either.
+Disclosed collaboration: Amir is a teammate on this project. We agreed I'd
+lead with yolo26s-small-coco (best results on my side so far) and he'd try
+his own recipe on Faster R-CNN; this branch reproduces his approach for a
+side-by-side comparison, to be discussed openly in the presentation. Not an
+independent methodology -- credited throughout as ported from
+[amiroo-star/inmind-detector, branch exp/03-recipe](https://github.com/amiroo-star/inmind-detector/tree/exp/03-recipe).
 
-**Model** (`models/baseline.py`, `config.yaml` `model:`): `slim_mobilenet_fpn`,
-stages (12, 16), fpn_channels 128, representation_size 512, 800px input --
-Amir's "slimB", 7,051,673 params / 19.238 GFLOPs, locally verified against
-his exact number. Not `fasterrcnn_mobilenet_v3_large_320_fpn` (an earlier,
-wrong guess in this file, still visible in git history) and not any
-ThunderNet/CEM/SAM head -- his repo has none; grepped his full branch to confirm.
+Mirrored end to end:
+- **Split** (`dataset.py`): train on whole subsets 2+5, validate on the
+  whole of subset 3 as an unseen-warehouse holdout, test on 1+4 unchanged.
+- **Model** (`models/baseline.py`, `config.yaml` `model.name`):
+  `fasterrcnn_mobilenet_v3_large_320_fpn` (320px input, 6.8 GFLOPs) instead
+  of this repo's stock 42.3-GFLOPs baseline.
+- **Augmentation** (`dataset.py`'s `_augment`): horizontal flip + brightness/
+  contrast/saturation jitter, train split only -- his exact function, not
+  this repo's separate background-swap/scale-jitter pipeline.
+- **LR schedule** (`train.py`): warmup + cosine decay stepped per batch
+  (`schedule: cosine`, `warmup_fraction: 0.05`), matching his schedule
+  shape rather than this repo's old per-epoch schedule.
 
-**Validation split** (`dataset.py`): proportional-to-test, not whole-subset.
-Amir's own split (subsets 2+5 train, whole subset 3 val) validates on a
-different warehouse *and* a different class mix than test (subsets 1/4) --
-he's flagged this himself as making his own number optimistic. Copying it
-would inherit that bias. `frcnn-mobilenetv3-augment`'s split fixes the class-mix
-problem but does it by reading subsets 1/4 at runtime on every dataset init --
-a real coupling to test we'd rather not have, even with zero pixels/labels
-crossing over. This branch instead: pools subsets 2/3/5 for both train and
-validation (never opens 1/4), and picks which pool images go to validation
-via a greedy sampler targeting a **fixed constant** -- test's real per-category
-distribution, computed once offline from the actual annotation JSONs and
-hardcoded in `dataset.py`, not read at runtime. Achieved vs. target (test):
+Added on top of his pipeline, not present on his branch:
+- `test_eval_every: 10` -- periodic held-out subsets-1/4 monitoring during
+  training, logged as `[TEST subsets 1/4]`, never used for `best.pt`
+  selection.
+- `history.json` -- per-epoch train_loss/val_mAP50/lr/test_mAP50, written
+  every epoch (survives a Colab disconnect), which is what
+  `results/generate_report.py`'s LR-vs-epoch panel plots. Amir's branch
+  also writes `lr` into its own `history.json` every epoch, but has no
+  report generator to plot it -- this branch reuses this repo's existing
+  `results/generate_report.py`, so the same numbers actually get charted.
 
-| category | test (target) | old whole-subset-3 | this split |
-|---|---|---|---|
-| pallet | 81.09% | 88.06% | 80.88% |
-| small_load_carrier | 13.82% | 8.57% | 12.93% |
-| stillage | 3.11% | 1.51% | 3.46% |
-| pallet_truck | 1.79% | 1.16% | 2.03% |
-| forklift | 0.19% | 0.71% | 0.70% |
-
-**Augmentation / LR schedule**: same as Amir's (horizontal flip + photometric
-jitter, warmup + cosine decay), already correct on this branch.
-
-**Target**: Amir's own repeated runs of this exact recipe landed 0.2849-0.2929
-test mAP@0.5 (run-to-run variance, not a single number -- see his
-`EXPERIMENTS.md`). This branch's 30-epoch run should land in the same range;
-its validation-based checkpoint selection may track test slightly better
-since validation now resembles test's class mix, but that's not guaranteed
-to move the final number much on its own.
-
-
+**Comparison point -- reported by Amir, not reproduced here:** his README/
+commits report ~26% test-set accuracy after a 20-epoch run. His current
+`config.yaml` is set to 40 epochs, and his repo has no committed
+`history.json` or run log for the 20-epoch run the 26% figure came from, so
+it's recorded here as a reference target pending an actual comparable run
+on this branch, not a validated result.
 
 ## ⚠️ frcnn-mobilenetv3-augment: validation split is intentionally biased (demo)
 
