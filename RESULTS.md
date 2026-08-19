@@ -13,5 +13,7 @@ This is just the running scoreboard.
 | frcnn-mobilenetv3-augment-epoch40 | frcnn-mobilenetv3-augment | 0.2125 | 0.2760 (best so far, epoch 34) | 18.95 M | not measured (periodic in-training check, not a full eval.py run) | val/test gap widened further -- the decline (0.2280 -> 0.2271 -> 0.2125) is the val/test divergence this branch's biased split is built to demonstrate; final full eval.py on best.pt (epoch 34) was 0.2306 -- see row below |
 | frcnn-mobilenetv3-augment-50-epochs | frcnn-mobilenetv3-augment | 0.2306 | 0.2760 (epoch 34/50) | 18.95 M | 42.316 | full eval.py run, end of training, on epoch-34's best.pt |
 | yolov4t-loco-50-of-100-epochs | yolov4t-loco | 0.000 | 0.000 (epoch 50/100) | not measured | not measured | Loss collapsed to exactly 0.0000 -- broken, not a legitimate low score. Abandoned per earlier decision (unmaintained recipe, anchor/backbone setup never worked); not investigated further. |
+| frcnn-amir-recipe-epoch10 | frcnn-amir-recipe | 0.1591 | 0.2345 (epoch 10/30) | 7.05 M | 19.238 | full eval.py run on best.pt from phase 1 (epoch 10/30); large val (0.2345)/test (0.1591) gap, same warehouse-shortcut pattern as yolo26n-coco |
+| frcnn-amir-recipe-epoch20-inprogress | frcnn-amir-recipe | not yet evaluated | 0.3237 (epoch 19/20) | 7.05 M | not measured (periodic in-training check, not a full eval.py run) | phase 2 in progress (resumed from epoch 11, best_map 0.2345 -> 0.3237 by epoch 19/20); full eval.py pending at end of phase |
 
 Target: 0.70 mAP@0.5.
