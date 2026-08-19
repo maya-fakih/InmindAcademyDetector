@@ -100,12 +100,32 @@ if [[ "$MODE" == "fresh" && -f "vendor/pytorch_yolov4/yolov4-tiny.cfg" ]]; then
     uv run python scripts/cluster_anchors.py --raw-dir "$DATA_DIR" --write
 fi
 
+# --- 3c. yolov4-tiny COCO-pretrained backbone (persisted on Drive) ----------
+# scripts/download_yolov4tiny_backbone.sh exists but was never wired into this
+# runner, so every fresh Colab VM hit FileNotFoundError on
+# weights/yolov4-tiny.conv.29 at train.py startup. Downloading it straight to
+# an ephemeral VM path would also mean re-downloading every session; instead
+# it goes under DRIVE_ROOT like the dataset and checkpoints, and
+# colab_config.yaml's model.checkpoint is rewritten to point at it.
+# Guarded on scripts/download_yolov4tiny_backbone.sh existing, so this is a
+# no-op for every other branch.
+BACKBONE_WEIGHTS_PATH=""
+if [[ -f "scripts/download_yolov4tiny_backbone.sh" ]]; then
+    BACKBONE_DIR="${DRIVE_ROOT}/pretrained_weights"
+    echo "[setup] checking yolov4-tiny COCO-pretrained backbone..."
+    bash scripts/download_yolov4tiny_backbone.sh "$BACKBONE_DIR"
+    BACKBONE_WEIGHTS_PATH="${BACKBONE_DIR}/yolov4-tiny.conv.29"
+fi
+
 python3 -c "
 import yaml
 with open('config.yaml') as f:
     config = yaml.safe_load(f)
 config['data']['raw_dir'] = '${DATA_DIR}'
 config['output_dir'] = '${RUNS_DIR}'
+backbone_path = '${BACKBONE_WEIGHTS_PATH}'
+if backbone_path and 'model' in config and 'checkpoint' in config.get('model', {}):
+    config['model']['checkpoint'] = backbone_path
 with open('colab_config.yaml', 'w') as f:
     yaml.safe_dump(config, f, sort_keys=False)
 "
