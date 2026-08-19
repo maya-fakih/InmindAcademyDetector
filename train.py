@@ -1,6 +1,7 @@
 """Train the LOCO Faster R-CNN baseline (Amir-recipe split)."""
 
 import argparse
+import gc
 import json
 import math
 import random
@@ -101,7 +102,12 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
         test_dataset,
         batch_size=settings["batch_size"],
         shuffle=False,
-        num_workers=settings["num_workers"],
+        # 0, not settings["num_workers"]: subsets 1+4 combined are ~2.6x the size of the
+        # val split (subset 3) and this loader only spins up once every test_eval_every
+        # epochs, so it's the biggest, spikiest RAM consumer in the loop -- forked worker
+        # processes here are what pushed a resumed run OOM (worker killed by SIGKILL) at
+        # epoch 10 on a standard Colab runtime. Not worth the prefetch speedup.
+        num_workers=0,
         collate_fn=collate_fn,
     )
     test_eval_every = settings.get("test_eval_every", 0)
@@ -217,14 +223,6 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
                 }
             )
         test_map50: float | None = None
-        if test_eval_every > 0 and (
-            (epoch + 1) % test_eval_every == 0 or (epoch + 1) == settings["epochs"]
-        ):
-            test_map50 = compute_map50(model, test_loader, device)
-            print(f"  [TEST subsets 1/4] epoch {epoch + 1}: test_mAP50 {test_map50:.4f}")
-            if run is not None:
-                run.log({"epoch": epoch + 1, "test_mAP50": test_map50})
-
         history.append(
             {
                 "epoch": epoch + 1,
@@ -251,6 +249,11 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             )
             print(f"  saved new best: {best_map:.4f}")
 
+        # Saved *before* the periodic test-set eval below on purpose: that eval is a
+        # diagnostic extra (never used to pick best.pt -- see the comment where
+        # test_loader is built) and it's also the biggest, spikiest memory consumer in
+        # the loop. If it OOMs, this epoch's actual training progress must not be lost
+        # and re-training it on resume must not be required.
         torch.save(
             {
                 "epoch": epoch,
@@ -260,6 +263,26 @@ def train(config: dict[str, Any], run: Run | None, resume_from: str | None = Non
             },
             last_checkpoint_path,
         )
+
+        if test_eval_every > 0 and (
+            (epoch + 1) % test_eval_every == 0 or (epoch + 1) == settings["epochs"]
+        ):
+            gc.collect()
+            torch.cuda.empty_cache()
+            try:
+                test_map50 = compute_map50(model, test_loader, device)
+                print(f"  [TEST subsets 1/4] epoch {epoch + 1}: test_mAP50 {test_map50:.4f}")
+                if run is not None:
+                    run.log({"epoch": epoch + 1, "test_mAP50": test_map50})
+            except RuntimeError as error:
+                # Most likely an OOM (worker killed by SIGKILL surfaces here as a
+                # RuntimeError, not torch.cuda.OutOfMemoryError, since it's host RAM
+                # exhaustion in a DataLoader worker, not GPU memory). This eval is a
+                # nice-to-have trail for unattended runs, not a training input, so
+                # losing one data point isn't worth crashing an otherwise-healthy run.
+                print(f"  [TEST subsets 1/4] epoch {epoch + 1}: skipped, eval failed: {error}")
+            history[-1]["test_mAP50"] = test_map50
+            history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
 
     print(f"[done] best weights: {weights_dir / 'best.pt'}")
 
