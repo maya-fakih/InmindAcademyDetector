@@ -8,5 +8,7 @@ This is just the running scoreboard.
 | yolo26n-coco-50-epochs | yolo26s-coco | 0.112 | 0.305 (epoch 33/50) | 2.51 M | 5.75 | COCO-pretrained, no head transfer, no leak check yet |
 | yolo26n-coco-100-epochs | yolo26s-coco | 0.156 | 0.349 (best.ckpt tracking) | 2.51 M | 5.75 | Large val (subsets 2/3/5 held-out)/test (subsets 1/4) gap identified -- warehouse-shortcut overfitting, not a bug (see Handoff.md). Augmentation + warm-restart fix in progress. |
 | yolo26s-small-coco-50-epochs | yolo26s-small-coco | 0.210 | 0.409 (epoch 50/50) | 9.95 M | 22.45 | Real improvement over nano from larger architecture; not yet at target. Extending to 100 epochs. |
+| frcnn-mobilenetv3-augment-50-epochs | frcnn-mobilenetv3-augment | 0.2306 | 0.2760 (epoch 34/50) | 18.95 M | 42.316 | Periodic test checks during training: 0.2280 (ep20) -> 0.2271 (ep30) -> 0.2125 (ep40), declining while val kept climbing -- the val/test divergence this branch's split is built to demonstrate. |
+| yolov4t-loco-50-of-100-epochs | yolov4t-loco | 0.000 | 0.000 (epoch 50/100) | not measured | not measured | Loss collapsed to exactly 0.0000 -- broken, not a legitimate low score. Abandoned per earlier decision (unmaintained recipe, anchor/backbone setup never worked); not investigated further. |
 
 Target: 0.70 mAP@0.5.
